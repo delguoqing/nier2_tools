@@ -1,0 +1,715 @@
+import os
+import sys
+import random
+import numpy
+import util
+import math
+import json
+import zlib
+import test_bone
+
+class WMB(object):
+	
+	def __init__(self, lod_infos, submesh_infos, geo_buffers, bone_infos, mesh_group_infos,
+				 bonesets, bonemap, materials):
+		self.lod_infos = lod_infos
+		self.submesh_infos = submesh_infos
+		self.geo_buffers = geo_buffers
+		self.bone_infos = bone_infos
+		self.mesh_group_infos = mesh_group_infos
+		self.bonesets = bonesets
+		self.bonemap = bonemap
+		self.materials = materials
+
+class SubMeshInfo(object):
+	
+	def read(self, wmb):
+		self.geo_idx = wmb.get("I")
+		self.boneset_idx = wmb.get("i")
+		self.vstart = wmb.get("I")
+		self.istart = wmb.get("I")
+		self.vnum = wmb.get("I")
+		self.inum = wmb.get("I")
+		self.prim_num = wmb.get("I")
+		
+	def __str__(self):
+		return "buf:%d,boneset:%d,vstart:%d,istart:%d,vnum:%d,inum:%d,prim_num:%d" % (
+			self.geo_idx, self.boneset_idx, self.vstart, self.istart, self.vnum, self.inum,
+			self.prim_num)
+	
+class GeoBuffer(object):
+	
+	def read(self, wmb):
+		self._params = wmb.get("12I")
+		self.vb_offsets = self._params[:4]
+		assert self.vb_offsets[2] == 0 and self.vb_offsets[3] == 0
+		self.vb_strides = self._params[4:8]
+		assert self.vb_strides[2] == 0 and self.vb_strides[3] == 0
+		self.vnum = self._params[8]
+		self.unk = self._params[9]
+		self.ib_offset = self._params[10]
+		self.inum = self._params[11]
+		self.vbufs = []
+		for i, vb_off in enumerate(self.vb_offsets):
+			if vb_off == 0:
+				break
+			wmb.seek(vb_off)
+			vbuf = wmb.get_raw(self.vb_strides[i] * self.vnum)
+			self.vbufs.append(vbuf)
+		wmb.seek(self.ib_offset)
+		self.ibuf = wmb.get_raw(self.inum * 4)
+		self.vertices = self.parse_vb()
+		
+	def __str__(self):
+		return "vb_offs=0x%x/0x%x/%d,%d,vb_strides=0x%x/0x%x/%d/%d,vnum=%d,%d,ib_off=0x%x,inum=%d" % self._params
+	
+	def test(self):
+		vb0 = util.get_getter(self.vbufs[0], "<")
+		def f(v):
+			return (v * 2 - 255.0) / 255.0
+		
+		for i in xrange(self.vnum):
+			vb0.seek(i * self.vb_strides[0])
+			vb0.skip(0xc)	# position
+			normal = map(f, vb0.get("3B"))	# mostly normalized, with some custom normals ...
+			unk0 = vb0.get("B")
+			vb0.skip(0xc)	# uv, bone indices, bone weights
+			assert unk0 in (0x0, 0xff)
+
+	def parse_vb(self):
+		def f(v):
+			return (v * 2 - 255.0) / 255.0
+		
+		vertices = []
+		vb = util.get_getter(self.vbufs[0], "<")
+		stride = self.vb_strides[0]
+		
+		assert stride == 0x1C
+		for i in xrange(self.vnum):
+			x, y, z = vb.get("3f")
+			nx, ny, nz = map(f, vb.get("3B"))
+			unknown = vb.get("B")
+			u, v = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
+			bone_indices = vb.get("4B")
+			bone_weights = vb.get("4B")
+			#assert sum(bone_weights) == 0xFF, "bone_weights sum=0x%x" % sum(bone_weights)
+			vertices.append({
+				"position": (x, y, z),
+				"normal": (nx, ny, nz),
+				"unknown": unknown,
+				"uv": (u, v),
+				"bone_indices": bone_indices,
+				"bone_weights": bone_weights,
+			})
+			
+		return vertices
+		
+		
+class LodInfo(object):
+	
+	def read(self, wmb):
+		self._params = wmb.get("Ii3I")
+		wmb.seek(self._params[0])
+		self.name = wmb.get_cstring()
+		self.lodlevel = self._params[1]
+		self.submesh_start = self._params[2]
+		self.submesh_num = self._params[4]
+		wmb.seek(self._params[3])
+		self.submesh = []
+		print str(self)
+		for i in xrange(self.submesh_num):
+			submesh_info = LodSubmeshInfo()
+			print "%d:" % i,
+			submesh_info.read(wmb)
+			self.submesh.append(submesh_info)
+		
+	def __str__(self):
+		return "%s: level:%d, [%d,%d), 0x%x" % (self.name, self.lodlevel, self.submesh_start, self.submesh_start + self.submesh_num, self._params[3])
+		
+class LodSubmeshInfo(object):
+	
+	def read(self, wmb):
+		self.geo_index = wmb.get("I")
+		self.mesh_group_index = wmb.get("I")
+		self.mat_index = wmb.get("I")
+		unk0 = wmb.get("i")
+		assert unk0 == -1
+		# no use, redundant
+		self.mesh_group_mat_pair_index = wmb.get("I")
+		unk1 = wmb.get("i")	# index into the last block, element size = 0x18
+		print "geo:%d, mesh_grp:%d, mat:%d, mesh_grp_mat:%d, unkowns=%d,%d" % (
+			self.geo_index, self.mesh_group_index, self.mat_index,
+			self.mesh_group_mat_pair_index, unk0, unk1)
+
+class MeshGroupInfo(object):
+	
+	def read(self, wmb):
+		self.params = wmb.get("I6f4I")
+		name_offset = self.params[0]
+		self.bounding_box = self.params[1:7]
+		self.offset2, self.n2, self.offset3, self.n3 = self.params[7:]
+		wmb.seek(name_offset)
+		self.name = wmb.get_cstring()
+		
+		# preprocessed data, which is not important for ripping
+		
+		# related material
+		wmb.seek(self.offset2)
+		num2 = wmb.get("%dH" % self.n2, force_tuple=True)
+		self.bound_materials = num2
+		# related bones
+		wmb.seek(self.offset3)
+		num3 = wmb.get("%dH" % self.n3, force_tuple=True)
+		self.bound_bones = num3
+		
+		#print "%s: (%f,%f,%f)-(%f,%f,%f)" % (name, bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3], bounding_box[4], bounding_box[5])
+		#print "num2:", len(num2)
+		#print num2
+		#print "related bones:", len(num3)
+		#print num3
+
+class Material(object):
+	
+	def read(self, wmb):
+		params = wmb.get("HHHH10I")
+		#assert params[0] == 0x707e0 and params[1] == 0xf0005 # wrong
+		# vs/ps stringid?
+		strings = [""] * len(params)
+		wmb.seek(params[4])
+		strings[4] = wmb.get_cstring()	# material name
+		wmb.seek(params[5])
+		strings[5] = wmb.get_cstring()	# effect name
+		wmb.seek(params[6])
+		strings[6] = wmb.get_cstring()	# technique
+		
+		self.name = strings[4]
+		self.effect_name = strings[5]
+		self.technique_name = strings[6]
+		
+		# sampler
+		sampler_offset = params[8]
+		sampler_num = params[9]
+		wmb.seek(sampler_offset)
+		self.samplers = []	# [(sampler_name, texture_hash)]
+		for j in xrange(sampler_num):
+			# sampler name, texture hash(which is stored in a wta file or whatever)
+			self.samplers.append(list(wmb.get("2I")))
+		for j in xrange(sampler_num):
+			wmb.seek(self.samplers[j][0])
+			self.samplers[j][0] = wmb.get_cstring()
+			
+		# attributes/uniforms
+		var_offset = params[12]
+		var_num = params[13]
+		wmb.seek(var_offset)
+		_vars = []
+		for j in xrange(var_num):
+			_vars.append(list(wmb.get("If")))
+		for j in xrange(var_num):
+			wmb.seek(_vars[j][0])
+			_vars[j][0] = wmb.get_cstring()
+		self.uniforms = _vars
+			
+		#print ("Mat%d:" % i),
+		#print ",".join(map(hex, params))
+		#print strings[4:7]
+		#print "samplers\n", "\n".join(["%s:0x%x" % tuple(v) for v in self.samplers])
+		print "vars", ",".join([v[0] + ":%.2f" % v[1] for v in _vars])
+	
+#DATA_ROOT = r"G:\game\nier_automata\3DMGAME-NieR.Automata.Day.One.Edition-3DM\cpk_unpacked"
+DATA_ROOT = r"..\data"
+DUMP_OBJ = False
+DUMP_MAX_LOD = 0
+DUMP_GTB = True
+DUMP_GTB_COMPRESS = True
+
+def parse(wmb):
+	FOURCC = wmb.get("4s")
+	assert FOURCC == "WMB3", "not a WMB3 file!"
+	version = wmb.get("I")
+	# most wmb has a version of 0x20160116, so I just ignore them a.t.m
+	assert version in (0x20160116, 0x20151123, 0x20151001, 0x10000)	# seems like they are using date as version
+	if version != 0x20160116:
+		print "old version is ignored a.t.m"
+		return
+	
+	assert wmb.get("I") == 0
+	
+	# header is of variant size, find 0xFFFF
+	# after that, some offset + count pairs, each represent a specific data block
+	
+	# even though Devolno is used, we can still get some information from executable?
+
+	if version in (0x20160116, 0x20151123):
+		next_offset = 0x10
+	elif version in (0x20151001, 0x10000):
+		next_offset = 0x14
+	else:
+		next_offset = 0x10
+
+	# check some specific value, but it doesn't apply for all files	
+	check_0xFFFF = False
+	if check_0xFFFF:
+		wmb.seek(next_offset - 2)
+		assert wmb.get("H") == 0xffff, "check 0xFFFF failed!"
+	else:
+		wmb.seek(next_offset)
+		
+	bounding_box = wmb.get("6f")	# x,y,z,w,h,d
+
+	# subblocks
+	# dummy.wmb is of size 0x88, which tells us the header size
+	subblock_num = (0x88 - 0x28) / 0x8
+	subblocks = []
+	subblock_desc = ["Bone", "Unk", "Geo", "SubMesh", "Lod", "Unk", "BoneMap", "Boneset", "Mat", "MeshGroup", "MeshGrpMat", "Unk"] 
+	for i in xrange(subblock_num):
+		subblocks.append(wmb.get("2I"))
+		if i < len(subblock_desc):
+			desc = subblock_desc[i]
+		else:
+			desc = ""
+		if desc:
+			print desc + ":",
+		print hex(subblocks[-1][0]), subblocks[-1][1]
+
+	bone_infos = read_bone(wmb, subblocks[0][0], subblocks[0][1])
+	read_rev(wmb, subblocks[1][0], subblocks[1][1])
+	#splitter("GeoBuffer")
+	geo_buffers = read_geo(wmb, subblocks[2][0], subblocks[2][1])
+
+	# inspect vertex buffer, little experiment
+	#for geo_buffer in geo_buffers:
+	#	geo_buffer.test()
+		
+	#splitter("Submesh")
+	submesh_infos = read_submesh(wmb, subblocks[3][0], subblocks[3][1])
+		
+	#splitter("Lod")
+	lod_infos = read_lod(wmb, subblocks[4][0], subblocks[4][1])
+	
+	bonemap = read_bonemap(wmb, subblocks[6][0], subblocks[6][1])
+	
+	bonesets = read_bonesets(wmb, subblocks[7][0], subblocks[7][1])
+	#splitter("Mat?")
+	mats = read_mat(wmb, subblocks[8][0], subblocks[8][1])
+	
+	#splitter("MeshGroup")
+	mesh_group_infos = read_mesh_group(wmb, subblocks[9][0], subblocks[9][1])
+	
+	# (MeshGroup, MatIndex) pair
+	#splitter("MeshGroup/MatIndex Pair")
+	read_texid(wmb, subblocks[10][0], subblocks[10][1])
+	
+	if DUMP_OBJ:
+		for lodlv in xrange(DUMP_MAX_LOD + 1):
+			lod_info = lod_infos[lodlv]
+			for submesh_idx in xrange(lod_info.submesh_start, lod_info.submesh_start + lod_info.submesh_num):
+				outpath = lod_info.name + "_" + str(submesh_idx) + ".obj"
+				dump_submesh(submesh_infos[submesh_idx], geo_buffers, outpath)
+				
+	#test_bone.test_bone(bone_infos)
+	
+	wmb = WMB(lod_infos, submesh_infos, geo_buffers, bone_infos, mesh_group_infos, bonesets,
+			  bonemap, mats)
+	return wmb
+	
+def read_submesh(wmb, offset, count):
+	if offset == 0:
+		return []
+	wmb.seek(offset)
+	submesh_info_list = []
+	for i in xrange(count):
+		submesh_info = SubMeshInfo()
+		submesh_info.read(wmb)
+		submesh_info_list.append(submesh_info)
+		print ("%02d:" % i), submesh_info
+	return submesh_info_list
+
+def read_geo(wmb, offset, count):
+	geo_buffer_list = []
+	if offset != 0:
+		for i in xrange(count):
+			wmb.seek(offset + i * 0x30)
+			geo_buf = GeoBuffer()
+			geo_buf.read(wmb)
+			geo_buffer_list.append(geo_buf)
+			print "%d:" % i, geo_buf
+			
+	return geo_buffer_list
+
+def read_rev(wmb, offset, count):
+	rev_offset = offset
+	rev_size = count
+	# ??	offset, count, size = 0x1, maybe has block padding	
+	if rev_offset != 0x0:
+		wmb.seek(rev_offset)
+		#print wmb.get("%dB" % rev_size)
+
+class BoneInfo(object):
+	
+	def __init__(self, bone_index):
+		self.bone_index = bone_index
+		
+	def make_scale_mat(self, sx, sy, sz):
+		scale_mat = numpy.matrix([
+			[sx, 0, 0, 0],
+			[0, sy, 0, 0],
+			[0, 0, sz, 0],
+			[0, 0, 0, 1]
+		])
+		return scale_mat
+		
+	def make_rotate_x(self, rx):
+		c = math.cos(rx)
+		s = math.sin(rx)
+		return numpy.matrix([
+			[1, 0, 0, 0],
+			[0, c, s, 0],
+			[0, -s, c, 0],
+			[0, 0, 0, 1]
+		])
+
+	def make_rotate_y(self, ry):
+		c = math.cos(ry)
+		s = math.sin(ry)
+		return numpy.matrix([
+			[c, 0, -s, 0],
+			[0, 1, 0, 0],
+			[s, 0, c, 0],
+			[0, 0, 0, 1]
+		])
+	
+	def make_rotate_z(self, rz):
+		c = math.cos(rz)
+		s = math.sin(rz)
+		return numpy.matrix([
+			[c, s, 0, 0],
+			[-s, c, 0, 0],
+			[0, 0, 1, 0],
+			[0, 0, 0, 1]
+		])
+	
+	def make_rotate_mat(self, rx, ry, rz):
+		return self.make_rotate_x(rx) * self.make_rotate_y(ry) * self.make_rotate_z(rz)
+	
+	def make_trans_mat(self, tx, ty, tz):
+		return numpy.matrix([
+			[1, 0, 0, 0],
+			[0, 1, 0, 0],
+			[0, 0, 1, 0],
+			[tx, ty, tz, 1]
+		])
+		
+	def read(self, wmb):
+		self.bone_id = wmb.get("H")
+		self.parent_idx = wmb.get("h")
+		self.local_pos = wmb.get("3f")
+		self.local_rot = wmb.get("3f")
+		self.local_scale = wmb.get("3f")
+		
+		# world position for A-pose
+		self.world_pos = wmb.get("3f")
+		self.world_rot = wmb.get("3f")
+		self.world_scale = wmb.get("3f")
+		# world position for T-pose
+		# bind pose is A-pose, so this position seems useless
+		self.world_position_tpose = wmb.get("3f")
+	
+		s = self.make_scale_mat(self.local_scale[0], self.local_scale[1], self.local_scale[2])
+		r = self.make_rotate_mat(self.local_rot[0], self.local_rot[1], self.local_rot[2])
+		t = self.make_trans_mat(self.local_pos[0], self.local_pos[1], self.local_pos[2])
+		self.local_matrix = s * r * t
+		
+		s = self.make_scale_mat(self.world_scale[0], self.world_scale[1], self.world_scale[2])
+		r = self.make_rotate_mat(self.world_rot[0], self.world_rot[1], self.world_rot[2])
+		t = self.make_trans_mat(self.world_pos[0], self.world_pos[1], self.world_pos[2])
+		self.world_matrix = s * r * t
+		self.offset_matrix = self.world_matrix.getI()
+		
+	def print_out(self):
+		# global bone id?, parent bone index
+		print "-" * 20
+		print "Bone index %d" % self.bone_index
+		print "Bone id=%d, Parent index=%d" % (self.bone_id, self.parent_idx)
+		# position, rotation(quaternion compressed?), scale
+		#print "Local Pos  ", self.local_pos
+		#print "Local Rot  ", self.local_rot
+		#print "Local Scale", self.local_scale
+		#print
+		# matrix
+		#print "World Pos  ", self.world_pos
+		#print "World Rot  ", self.world_rot
+		#print "World Scale", self.world_scale
+		#print "World Pos(TPose) ", self.world_position_tpose
+		#print "World PosDiff", self.world_position_tpose[0] - self.world_pos[0], self.world_position_tpose[1] - self.world_pos[1], self.world_position_tpose[2] - self.world_pos[2]
+	
+	def print_cmp_parent(self, pinfo):
+		print "compare ---"
+		print "Local Mat"
+		print self.local_matrix
+		print "World Mat"
+		print self.world_matrix
+		print "Local Mat * Parent World Mat"
+		print self.local_matrix * pinfo.world_matrix
+		print "CalcWorld - world"
+		diff = self.local_matrix * pinfo.world_matrix - self.world_matrix
+		print diff
+		assert ((abs(diff) < 1e-3).all())
+	
+def read_bone(wmb, offset, count):
+	bone_offset = offset
+	bone_count = count
+	if bone_offset == 0:
+		return []
+	# bone? offset, count, size = 0x58, has block padding to 0x10
+	wmb.seek(bone_offset)
+	ret = []
+	for bone_index in xrange(bone_count):
+		bone_info = BoneInfo(bone_index)
+		bone_info.read(wmb)
+		ret.append(bone_info)
+		
+	# print bone info with referrence to its parent
+	#for bone_index in xrange(bone_count):
+	#	bone_info = ret[bone_index]
+	#	print "=" * 20
+	#	if bone_info.parent_idx != -1:
+	#		ret[bone_info.parent_idx].print_out()
+	#	bone_info.print_out()
+	#	if bone_info.parent_idx != -1:
+	#		bone_info.print_cmp_parent(ret[bone_info.parent_idx])
+		
+	# make sure bone id is unique
+	bone_ids = set()
+	for bone_info in ret:
+		bone_ids.add(bone_info.bone_id)
+	assert len(bone_ids) == len(ret)
+	
+	return ret
+		
+def read_lod(wmb, offset, count):
+	lod_list = []
+	if offset == 0:
+		return lod_list
+	
+	for i in xrange(count):
+		wmb.seek(offset + i * 0x14)
+		lod = LodInfo()
+		lod.read(wmb)
+		lod_list.append(lod)
+	return lod_list
+	
+def read_mesh_group(wmb, offset, num):
+	if offset == 0:
+		return []
+	mesh_group_infos = []
+	for i in xrange(num):
+		wmb.seek(offset + i * 0x2c)
+		mesh_group_info = MeshGroupInfo()
+		mesh_group_info.read(wmb)
+		mesh_group_infos.append(mesh_group_info)
+	return mesh_group_infos
+
+def read_mat(wmb, offset, num):
+	mat_list = []
+	if offset == 0:
+		return mat_list
+	for i in xrange(num):
+		wmb.seek(offset + i * 0x30)
+		mat = Material()
+		print "Mat %d" % i,
+		mat.read(wmb)
+		mat_list.append(mat)
+	return mat_list
+
+def dump_submesh(submesh_info, geo_buffers, outpath):
+	geo_buffer = geo_buffers[submesh_info.geo_idx]
+	
+	vertices = []
+	for i in xrange(geo_buffer.vnum):
+		x, y, z = geo_buffer.vertices[i]["position"]
+		u, v = geo_buffer.vertices[i]["uv"]
+		#vertices.append((x, y, z, u, v))
+		nx, ny, nz = geo_buffer.vertices[i]["normal"]
+		vertices.append((x, y, z, u, v, nx, ny, nz))
+	
+	ib_reader = util.get_getter(geo_buffer.ibuf, "<")
+	ib_reader.seek(submesh_info.istart * 0x4)
+	indices = ib_reader.get("%dI" % submesh_info.inum)
+	
+	util.export_obj(vertices, indices, flip_v=True, outpath=outpath)
+
+def read_texid(wmb, offset, num):
+	if offset == 0:
+		return []
+	texid_list = []
+	wmb.seek(offset)
+	for i in xrange(num):
+		texid_list.append(wmb.get("2I"))
+		#print i, texid_list[-1]
+	return texid_list
+	
+def read_bonesets(wmb, offset, num):
+	if offset == 0:
+		return []
+	bonesets = []
+	wmb.seek(offset)
+	data = wmb.get("%dI" % (2 * num))
+	for i in xrange(num):
+		wmb.seek(data[i * 2])
+		bonesets.append(wmb.get("%dH" % data[i * 2 + 1], force_tuple=True))
+	return bonesets
+		
+def read_bonemap(wmb, offset, num):
+	if offset == 0:
+		return []
+	wmb.seek(offset)
+	return wmb.get("%dI" % num, force_tuple=True)
+	
+def test(path):
+	for fpath in util.iter_path(path):
+		if fpath.endswith(".wmb"):
+			do_test(fpath)
+	
+def test_rand(root):
+	fpath = random.choice(list(util.iter_path(root)))
+	do_test(fpath)
+
+def do_test(fpath):
+	print "processing:", fpath
+	fp = open(fpath, "rb")
+	wmb = util.get_getter(fp, "<")
+	wmb = parse(wmb)
+	fp.close()
+	
+	if DUMP_GTB:
+		dump_wmb(wmb, outpath=fpath.replace(".wmb", ".gtb"))
+
+def splitter(name="", dash_count=20):
+	print "-" * dash_count,
+	if name:
+		print name,
+	print "-" * dash_count
+	
+# only 19 files has different version than 0x20160116
+def collect_version(path):
+	version_dict = {}
+	for version in (0x20160116, 0x20151123, 0x20151001, 0x10000):
+		version_dict[version] = []
+	for fpath in util.iter_path(path):
+		if fpath.endswith(".wmb"):
+			print "processing:", fpath
+			fp = open(fpath, "rb")
+			wmb = util.get_getter(fp, "<")
+			version_dict[wmb.get("I", offset=0x4)].append(os.path.split(fpath)[1])
+			fp.close()
+	return version_dict
+
+def export_gtb(wmb, lod=0):
+	gtb = {"objects": {}}
+	# mesh
+	lod_info = wmb.lod_infos[lod]
+	for i, lod_submesh_info in enumerate(lod_info.submesh):
+		submesh_index = i + lod_info.submesh_start
+		submesh_info = wmb.submesh_infos[submesh_index]
+		geo_buffer = wmb.geo_buffers[lod_submesh_info.geo_index]
+		mesh_group_info = wmb.mesh_group_infos[lod_submesh_info.mesh_group_index]
+		
+		mesh_name = mesh_group_info.name + str(submesh_index)
+		print "dumping %s" % mesh_name
+
+		msh = {
+			"flip_v": 1,
+			"double sided": 0,
+			"shade_smooth": True,
+		}
+		
+		has_bone = (wmb.bonesets and submesh_info.boneset_idx != -1)
+		
+		index_num = submesh_info.inum
+		ib_reader = util.get_getter(geo_buffer.ibuf, "<")
+		ib_reader.seek(submesh_info.istart * 0x4)
+		msh["indices"] = ib_reader.get("%dI" % index_num, force_tuple=True)
+		min_index = min(msh["indices"])
+		max_index = max(msh["indices"])
+		msh["indices"] = map(lambda v: v - min_index, msh["indices"])
+		
+		vertex_num = max_index + 1 - min_index
+
+		msh["vertex_num"] = vertex_num
+		msh["index_num"] = index_num
+		msh["position"] = []
+		msh["uv_count"] = 1
+		msh["normal"] = []
+		msh["uv0"] = []
+		msh["max_involved_joint"] = has_bone and 4 or 0
+		if has_bone:
+			msh["joints"] = []
+			msh["weights"] = []
+		for v in geo_buffer.vertices[min_index: max_index + 1]:
+			msh["position"].extend(v["position"])
+			msh["normal"].extend(v["normal"])
+			msh["uv0"].extend(map(float, v["uv"]))	# float16 is not JSON serializable
+			if has_bone:
+				msh["joints"].extend(v["bone_indices"])
+				msh["weights"].extend(v["bone_weights"])
+		
+		mat = wmb.materials[lod_submesh_info.mat_index]
+		msh["textures"] = []
+		for sampler_name, texture_hash in mat.samplers:
+			# texture_path, uv_layer, hint01, hint02, ...
+			msh["textures"].append(("%08X.dds" % texture_hash, 0, sampler_name))
+
+		if has_bone:
+			boneset = wmb.bonesets[submesh_info.boneset_idx]
+			joint_min = min(msh["joints"])
+			joint_max = max(msh["joints"])
+			#print "joint min = %d, max = %d, bound_bones = %d" % (joint_min, joint_max, len(boneset))
+			#print "bound bones:", ",".join(map(str, boneset))
+			# map joint
+			for vi in xrange(len(msh["joints"])):
+				j, w = msh["joints"][vi], msh["weights"][vi]
+				if not w:
+					continue
+				msh["joints"][vi] = wmb.bonemap[boneset[j]]
+			msh["weights"] = map(lambda wint: wint / 255.0, msh["weights"])
+		
+		gtb["objects"][mesh_name] = msh
+	# skeleton
+	bone_num = len(wmb.bone_infos)
+	if bone_num > 0:
+		skel = gtb["skeleton"] = {}
+		skel["name"] = map(lambda v: "Bone%d" % v, range(bone_num))
+		skel["parent"] = [-1] * bone_num
+		skel["matrix"] = []
+		skel["bone_id"] = []
+		for bone_info in wmb.bone_infos:
+			bone_index = bone_info.bone_index
+			skel["parent"][bone_index] = bone_info.parent_idx
+			skel["matrix"].extend(bone_info.local_matrix.getA1())
+			skel["bone_id"].append(bone_info.bone_id)
+	
+	return gtb
+	
+def dump_wmb(wmb, outpath="a.gtb"):
+	gtb = export_gtb(wmb, lod=0)
+	if DUMP_GTB_COMPRESS:
+		fp = open(outpath, "wb")
+		fp.write("GTB\x00")
+		compressor = zlib.compressobj()
+		for chunk in json.JSONEncoder().iterencode(gtb):
+			fp.write(compressor.compress(chunk))
+		fp.write(compressor.flush())
+	else:
+		fp = open(outpath, "w")
+		json.dump(gtb, fp, indent=2, sort_keys=True, ensure_ascii=True)
+	fp.close()
+
+if __name__ == '__main__':
+	if len(sys.argv) == 1:
+		test(DATA_ROOT)
+	elif len(sys.argv) == 2:
+		if sys.argv[1] == "random":
+			test_rand(DATA_ROOT)
+		else:
+			test(sys.argv[1])
