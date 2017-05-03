@@ -48,3 +48,4 @@ Temporary Items
 src/log.txt
 *.log
 *.pyc
+tools/cripaktools/
