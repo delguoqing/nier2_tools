@@ -49,3 +49,6 @@ src/log.txt
 *.log
 *.pyc
 tools/cripaktools/
+data/
+src/build/
+src/dist/

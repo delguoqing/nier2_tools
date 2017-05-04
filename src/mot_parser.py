@@ -51,8 +51,10 @@ def read_track(mot, offset, count):
 				assert size == 0xc + track.keycount * 0x4
 			elif track.comtype in (3, ):
 				pass
+			elif track.comtype in (5, ):
+				pass
 			else:
-				assert False, "unknown type %d" % (track.comtype)
+				assert False, "unknown compression type %d" % (track.comtype)
 		else:
 			print
 	print "Dummy Track @ 0x%x" % (mot.offset - 0xc,),  dummy_track

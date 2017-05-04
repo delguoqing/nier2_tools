@@ -30,6 +30,11 @@ class Track(object):
 			mot.seek(self.offset + 0xc)
 			for i in xrange(self.keycount):
 				print "key%d" % i, mot.get("4B")
+		elif self.comtype == 6:
+			mot.seek(self.offset)
+			print mot.get("3f")
+			for i in xrange(self.keycount):
+				print "key%d" % i, mot.get("4B")
 	
 	def __str__(self):
 		ret = "Bone:%d, type=%d, compress=%d, keynum=%d, " % (
