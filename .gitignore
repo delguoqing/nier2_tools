@@ -52,3 +52,6 @@ tools/cripaktools/
 data/
 src/build/
 src/dist/
+dist/
+random_tests/
+src/twobyte.txt

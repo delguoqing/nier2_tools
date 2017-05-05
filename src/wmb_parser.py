@@ -11,7 +11,7 @@ import test_bone
 class WMB(object):
 	
 	def __init__(self, lod_infos, submesh_infos, geo_buffers, bone_infos, mesh_group_infos,
-				 bonesets, bonemap, materials):
+				 bonesets, bonemap, materials, flags):
 		self.lod_infos = lod_infos
 		self.submesh_infos = submesh_infos
 		self.geo_buffers = geo_buffers
@@ -20,6 +20,10 @@ class WMB(object):
 		self.bonesets = bonesets
 		self.bonemap = bonemap
 		self.materials = materials
+		self.flags = flags
+	
+	def get_vertex_index_size(self):
+		return (self.flags & 0x8) and 4 or 2
 
 class SubMeshInfo(object):
 	
@@ -39,6 +43,9 @@ class SubMeshInfo(object):
 	
 class GeoBuffer(object):
 	
+	def __init__(self, isize):
+		self.isize = isize
+		
 	def read(self, wmb):
 		self._params = wmb.get("12I")
 		self.vb_offsets = self._params[:4]
@@ -57,7 +64,10 @@ class GeoBuffer(object):
 			vbuf = wmb.get_raw(self.vb_strides[i] * self.vnum)
 			self.vbufs.append(vbuf)
 		wmb.seek(self.ib_offset)
-		self.ibuf = wmb.get_raw(self.inum * 4)
+		if self.isize == 2:
+			self.indices = wmb.get("%dH" % self.inum, force_tuple=True)
+		else:
+			self.indices = wmb.get("%dI" % self.inum, force_tuple=True)
 		self.vertices = self.parse_vb()
 		
 	def __str__(self):
@@ -162,7 +172,7 @@ class MeshGroupInfo(object):
 		num3 = wmb.get("%dH" % self.n3, force_tuple=True)
 		self.bound_bones = num3
 		
-		#print "%s: (%f,%f,%f)-(%f,%f,%f)" % (name, bounding_box[0], bounding_box[1], bounding_box[2], bounding_box[3], bounding_box[4], bounding_box[5])
+		print "%s: (%f,%f,%f)-(%f,%f,%f)" % (self.name, self.bounding_box[0], self.bounding_box[1], self.bounding_box[2], self.bounding_box[3], self.bounding_box[4], self.bounding_box[5])
 		#print "num2:", len(num2)
 		#print num2
 		#print "related bones:", len(num3)
@@ -235,6 +245,7 @@ def parse(wmb):
 	
 	assert wmb.get("I") == 0
 	
+	flags = wmb.get("I")
 	# header is of variant size, find 0xFFFF
 	# after that, some offset + count pairs, each represent a specific data block
 	
@@ -275,7 +286,7 @@ def parse(wmb):
 	bone_infos = read_bone(wmb, subblocks[0][0], subblocks[0][1])
 	read_rev(wmb, subblocks[1][0], subblocks[1][1])
 	#splitter("GeoBuffer")
-	geo_buffers = read_geo(wmb, subblocks[2][0], subblocks[2][1])
+	geo_buffers = read_geo(wmb, subblocks[2][0], subblocks[2][1], (flags & 0x8) and 4 or 2)
 
 	# inspect vertex buffer, little experiment
 	#for geo_buffer in geo_buffers:
@@ -310,7 +321,7 @@ def parse(wmb):
 	#test_bone.test_bone(bone_infos)
 	
 	wmb = WMB(lod_infos, submesh_infos, geo_buffers, bone_infos, mesh_group_infos, bonesets,
-			  bonemap, mats)
+			  bonemap, mats, flags)
 	return wmb
 	
 def read_submesh(wmb, offset, count):
@@ -325,16 +336,16 @@ def read_submesh(wmb, offset, count):
 		print ("%02d:" % i), submesh_info
 	return submesh_info_list
 
-def read_geo(wmb, offset, count):
+def read_geo(wmb, offset, count, isize):
 	geo_buffer_list = []
 	if offset != 0:
 		for i in xrange(count):
 			wmb.seek(offset + i * 0x30)
-			geo_buf = GeoBuffer()
+			geo_buf = GeoBuffer(isize)
 			geo_buf.read(wmb)
 			geo_buffer_list.append(geo_buf)
 			print "%d:" % i, geo_buf
-			
+		
 	return geo_buffer_list
 
 def read_rev(wmb, offset, count):
@@ -532,10 +543,7 @@ def dump_submesh(submesh_info, geo_buffers, outpath):
 		#vertices.append((x, y, z, u, v))
 		nx, ny, nz = geo_buffer.vertices[i]["normal"]
 		vertices.append((x, y, z, u, v, nx, ny, nz))
-	
-	ib_reader = util.get_getter(geo_buffer.ibuf, "<")
-	ib_reader.seek(submesh_info.istart * 0x4)
-	indices = ib_reader.get("%dI" % submesh_info.inum)
+	indices = geo_buffer.indices
 	
 	util.export_obj(vertices, indices, flip_v=True, outpath=outpath)
 
@@ -585,6 +593,35 @@ def do_test(fpath):
 	if DUMP_GTB:
 		dump_wmb(wmb, outpath=fpath.replace(".wmb", ".gtb"))
 
+def parse_isize(wmb):
+	FOURCC = wmb.get("4s")
+	assert FOURCC == "WMB3", "not a WMB3 file!"
+	version = wmb.get("I")
+	# most wmb has a version of 0x20160116, so I just ignore them a.t.m
+	assert version in (0x20160116, 0x20151123, 0x20151001, 0x10000)	# seems like they are using date as version
+	if version != 0x20160116:
+		print "old version is ignored a.t.m"
+		return 0
+	
+	assert wmb.get("I") == 0
+	
+	flags = wmb.get("I")
+	if (flags & 0x8) == 0:
+		return 1
+	else:
+		return 0
+	
+def do_test_isize(fpath):
+	fp = open(fpath, "rb")
+	wmb = util.get_getter(fp, "<")
+	res = parse_isize(wmb)
+	fp.close()
+	
+	if res:
+		print fpath
+		
+#do_test = do_test_isize
+
 def splitter(name="", dash_count=20):
 	print "-" * dash_count,
 	if name:
@@ -627,15 +664,13 @@ def export_gtb(wmb, lod=0):
 		has_bone = (wmb.bonesets and submesh_info.boneset_idx != -1)
 		
 		index_num = submesh_info.inum
-		ib_reader = util.get_getter(geo_buffer.ibuf, "<")
-		ib_reader.seek(submesh_info.istart * 0x4)
-		msh["indices"] = ib_reader.get("%dI" % index_num, force_tuple=True)
+		msh["indices"] = geo_buffer.indices[submesh_info.istart: submesh_info.istart + submesh_info.inum]
 		min_index = min(msh["indices"])
 		max_index = max(msh["indices"])
 		msh["indices"] = map(lambda v: v - min_index, msh["indices"])
 		
 		vertex_num = max_index + 1 - min_index
-
+		#print "inum, vnum", index_num, vertex_num, min_index, max_index, len(msh["indices"])
 		msh["vertex_num"] = vertex_num
 		msh["index_num"] = index_num
 		msh["position"] = []
