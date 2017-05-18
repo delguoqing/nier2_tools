@@ -10,8 +10,74 @@ import test_bone
 
 class WMB(object):
 	
-	def __init__(self, lod_infos, submesh_infos, geo_buffers, bone_infos, mesh_group_infos,
-				 bonesets, bonemap, materials, flags):
+	def is_supported_version(self):
+		return self.version == 0x20160116
+	
+	def valid_versions(self):
+		return (0x20160116, 0x20151123, 0x20151001, 0x10000)	# seems like they are using date as version
+	
+	def read_header(self, wmb):
+		FOURCC = wmb.get("4s")
+		assert FOURCC == "WMB3", "not a WMB3 file!"
+		self.version = wmb.get("I")
+		assert self.version in self.valid_versions()
+		# most wmb has a version of 0x20160116, so I just ignore them a.t.m
+		if not self.is_supported_version():
+			print "old version is ignored a.t.m"
+			return
+
+		assert wmb.get("I") == 0
+		
+		self.flags = wmb.get("I")
+			
+		self.bounding_box = wmb.get("6f")	# x,y,z,w,h,d
+	
+		# subblocks
+		# dummy.wmb is of size 0x88, which tells us the header size
+		subblock_num = (0x88 - 0x28) / 0x8
+		subblocks = []
+		subblock_desc = ["Bone", "Unk", "Geo", "SubMesh", "Lod", "Unk", "BoneMap", "Boneset", "Mat", "MeshGroup", "MeshGrpMat", "Unk"] 
+		for i in xrange(subblock_num):
+			subblocks.append(wmb.get("2I"))
+			if i < len(subblock_desc):
+				desc = subblock_desc[i]
+			else:
+				desc = ""
+			if desc:
+				print desc + ":",
+			print hex(subblocks[-1][0]), subblocks[-1][1]
+		self.subblocks = subblocks
+	
+	def read_rest(self, wmb):
+		subblocks = self.subblocks
+		bone_infos = read_bone(wmb, subblocks[0][0], subblocks[0][1])
+		read_rev(wmb, subblocks[1][0], subblocks[1][1])
+		#splitter("GeoBuffer")
+		geo_buffers = read_geo(wmb, subblocks[2][0], subblocks[2][1], (self.flags & 0x8) and 4 or 2)
+	
+		# inspect vertex buffer, little experiment
+		#for geo_buffer in geo_buffers:
+		#	geo_buffer.test()
+			
+		#splitter("Submesh")
+		submesh_infos = read_submesh(wmb, subblocks[3][0], subblocks[3][1])
+			
+		#splitter("Lod")
+		lod_infos = read_lod(wmb, subblocks[4][0], subblocks[4][1])
+		
+		bonemap = read_bonemap(wmb, subblocks[6][0], subblocks[6][1])
+		
+		bonesets = read_bonesets(wmb, subblocks[7][0], subblocks[7][1])
+		#splitter("Mat?")
+		mats = read_mat(wmb, subblocks[8][0], subblocks[8][1])
+		
+		#splitter("MeshGroup")
+		mesh_group_infos = read_mesh_group(wmb, subblocks[9][0], subblocks[9][1])
+		
+		# (MeshGroup, MatIndex) pair
+		#splitter("MeshGroup/MatIndex Pair")
+		read_texid(wmb, subblocks[10][0], subblocks[10][1])
+
 		self.lod_infos = lod_infos
 		self.submesh_infos = submesh_infos
 		self.geo_buffers = geo_buffers
@@ -19,12 +85,11 @@ class WMB(object):
 		self.mesh_group_infos = mesh_group_infos
 		self.bonesets = bonesets
 		self.bonemap = bonemap
-		self.materials = materials
-		self.flags = flags
-	
+		self.materials = mats
+		
 	def get_vertex_index_size(self):
 		return (self.flags & 0x8) and 4 or 2
-
+	
 class SubMeshInfo(object):
 	
 	def read(self, wmb):
@@ -224,105 +289,29 @@ class Material(object):
 		#print ",".join(map(hex, params))
 		#print strings[4:7]
 		#print "samplers\n", "\n".join(["%s:0x%x" % tuple(v) for v in self.samplers])
-		print "vars", ",".join([v[0] + ":%.2f" % v[1] for v in _vars])
+		
+	def print_uniforms(self):
+		print "vars", ",".join([v[0] + ":%.2f" % v[1] for v in self.uniforms])
 	
 #DATA_ROOT = r"G:\game\nier_automata\3DMGAME-NieR.Automata.Day.One.Edition-3DM\cpk_unpacked"
 DATA_ROOT = r"..\data"
-DUMP_OBJ = False
+DUMP_OBJ = True
 DUMP_MAX_LOD = 0
-DUMP_GTB = True
+DUMP_GTB = False
 DUMP_GTB_COMPRESS = True
 
 def parse(wmb):
-	FOURCC = wmb.get("4s")
-	assert FOURCC == "WMB3", "not a WMB3 file!"
-	version = wmb.get("I")
-	# most wmb has a version of 0x20160116, so I just ignore them a.t.m
-	assert version in (0x20160116, 0x20151123, 0x20151001, 0x10000)	# seems like they are using date as version
-	if version != 0x20160116:
-		print "old version is ignored a.t.m"
-		return
+	wmb_obj = WMB()
+	wmb_obj.read_header(wmb)
 	
-	assert wmb.get("I") == 0
-	
-	flags = wmb.get("I")
-	# header is of variant size, find 0xFFFF
-	# after that, some offset + count pairs, each represent a specific data block
-	
-	# even though Devolno is used, we can still get some information from executable?
+	if not wmb_obj.is_supported_version():
+		return wmb_obj
 
-	if version in (0x20160116, 0x20151123):
-		next_offset = 0x10
-	elif version in (0x20151001, 0x10000):
-		next_offset = 0x14
-	else:
-		next_offset = 0x10
-
-	# check some specific value, but it doesn't apply for all files	
-	check_0xFFFF = False
-	if check_0xFFFF:
-		wmb.seek(next_offset - 2)
-		assert wmb.get("H") == 0xffff, "check 0xFFFF failed!"
-	else:
-		wmb.seek(next_offset)
-		
-	bounding_box = wmb.get("6f")	# x,y,z,w,h,d
-
-	# subblocks
-	# dummy.wmb is of size 0x88, which tells us the header size
-	subblock_num = (0x88 - 0x28) / 0x8
-	subblocks = []
-	subblock_desc = ["Bone", "Unk", "Geo", "SubMesh", "Lod", "Unk", "BoneMap", "Boneset", "Mat", "MeshGroup", "MeshGrpMat", "Unk"] 
-	for i in xrange(subblock_num):
-		subblocks.append(wmb.get("2I"))
-		if i < len(subblock_desc):
-			desc = subblock_desc[i]
-		else:
-			desc = ""
-		if desc:
-			print desc + ":",
-		print hex(subblocks[-1][0]), subblocks[-1][1]
-
-	bone_infos = read_bone(wmb, subblocks[0][0], subblocks[0][1])
-	read_rev(wmb, subblocks[1][0], subblocks[1][1])
-	#splitter("GeoBuffer")
-	geo_buffers = read_geo(wmb, subblocks[2][0], subblocks[2][1], (flags & 0x8) and 4 or 2)
-
-	# inspect vertex buffer, little experiment
-	#for geo_buffer in geo_buffers:
-	#	geo_buffer.test()
-		
-	#splitter("Submesh")
-	submesh_infos = read_submesh(wmb, subblocks[3][0], subblocks[3][1])
-		
-	#splitter("Lod")
-	lod_infos = read_lod(wmb, subblocks[4][0], subblocks[4][1])
-	
-	bonemap = read_bonemap(wmb, subblocks[6][0], subblocks[6][1])
-	
-	bonesets = read_bonesets(wmb, subblocks[7][0], subblocks[7][1])
-	#splitter("Mat?")
-	mats = read_mat(wmb, subblocks[8][0], subblocks[8][1])
-	
-	#splitter("MeshGroup")
-	mesh_group_infos = read_mesh_group(wmb, subblocks[9][0], subblocks[9][1])
-	
-	# (MeshGroup, MatIndex) pair
-	#splitter("MeshGroup/MatIndex Pair")
-	read_texid(wmb, subblocks[10][0], subblocks[10][1])
-	
-	if DUMP_OBJ:
-		for lodlv in xrange(DUMP_MAX_LOD + 1):
-			lod_info = lod_infos[lodlv]
-			for submesh_idx in xrange(lod_info.submesh_start, lod_info.submesh_start + lod_info.submesh_num):
-				outpath = lod_info.name + "_" + str(submesh_idx) + ".obj"
-				dump_submesh(submesh_infos[submesh_idx], geo_buffers, outpath)
+	wmb_obj.read_rest(wmb)
 				
 	#test_bone.test_bone(bone_infos)
-	
-	wmb = WMB(lod_infos, submesh_infos, geo_buffers, bone_infos, mesh_group_infos, bonesets,
-			  bonemap, mats, flags)
-	return wmb
+
+	return wmb_obj
 	
 def read_submesh(wmb, offset, count):
 	if offset == 0:
@@ -354,7 +343,24 @@ def read_rev(wmb, offset, count):
 	# ??	offset, count, size = 0x1, maybe has block padding	
 	if rev_offset != 0x0:
 		wmb.seek(rev_offset)
-		#print wmb.get("%dB" % rev_size)
+		values = wmb.get("%dB" % rev_size)
+		
+		#print values
+		
+		values2 = []
+		for i in xrange(0, len(values), 2):
+			print values[i], values[i + 1]
+			values2.append((values[i], values[i + 1]))
+		values = values2	
+		
+		val_map = {}
+		for value in values:
+			if value not in val_map:
+				val_map[value] = 1
+			else:
+				val_map[value] += 1
+		for value in sorted(val_map.keys()):
+			print "%r: %d" % (value, val_map[value])
 
 class BoneInfo(object):
 	
@@ -441,7 +447,7 @@ class BoneInfo(object):
 		# global bone id?, parent bone index
 		print "-" * 20
 		print "Bone index %d" % self.bone_index
-		print "Bone id=%d, Parent index=%d" % (self.bone_id, self.parent_idx)
+		print "Bone id=%d, %d, %d, Parent index=%d" % (self.bone_id & 0xFF, self.bone_id, self.bone_id >> 8, self.parent_idx)
 		# position, rotation(quaternion compressed?), scale
 		#print "Local Pos  ", self.local_pos
 		#print "Local Rot  ", self.local_rot
@@ -481,12 +487,12 @@ def read_bone(wmb, offset, count):
 		ret.append(bone_info)
 		
 	# print bone info with referrence to its parent
-	#for bone_index in xrange(bone_count):
-	#	bone_info = ret[bone_index]
-	#	print "=" * 20
+	for bone_index in xrange(bone_count):
+		bone_info = ret[bone_index]
+		#print "=" * 20
 	#	if bone_info.parent_idx != -1:
 	#		ret[bone_info.parent_idx].print_out()
-	#	bone_info.print_out()
+		bone_info.print_out()
 	#	if bone_info.parent_idx != -1:
 	#		bone_info.print_cmp_parent(ret[bone_info.parent_idx])
 		
@@ -528,9 +534,11 @@ def read_mat(wmb, offset, num):
 	for i in xrange(num):
 		wmb.seek(offset + i * 0x30)
 		mat = Material()
-		print "Mat %d" % i,
 		mat.read(wmb)
 		mat_list.append(mat)
+		
+		#print "Mat %d" % i,
+		#mat.print_uniforms()
 	return mat_list
 
 def dump_submesh(submesh_info, geo_buffers, outpath):
@@ -543,7 +551,7 @@ def dump_submesh(submesh_info, geo_buffers, outpath):
 		#vertices.append((x, y, z, u, v))
 		nx, ny, nz = geo_buffer.vertices[i]["normal"]
 		vertices.append((x, y, z, u, v, nx, ny, nz))
-	indices = geo_buffer.indices
+	indices = geo_buffer.indices[submesh_info.istart: submesh_info.istart + submesh_info.inum]
 	
 	util.export_obj(vertices, indices, flip_v=True, outpath=outpath)
 
@@ -592,7 +600,14 @@ def do_test(fpath):
 	
 	if DUMP_GTB:
 		dump_wmb(wmb, outpath=fpath.replace(".wmb", ".gtb"))
-
+		
+	if DUMP_OBJ:
+		for lodlv in xrange(DUMP_MAX_LOD + 1):
+			lod_info = wmb.lod_infos[lodlv]
+			for submesh_idx in xrange(lod_info.submesh_start, lod_info.submesh_start + lod_info.submesh_num):
+				outpath = lod_info.name + "_" + str(submesh_idx) + ".obj"
+				dump_submesh(wmb.submesh_infos[submesh_idx], wmb.geo_buffers, outpath)
+				
 def parse_isize(wmb):
 	FOURCC = wmb.get("4s")
 	assert FOURCC == "WMB3", "not a WMB3 file!"

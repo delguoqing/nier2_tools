@@ -48,10 +48,11 @@ Temporary Items
 src/log.txt
 *.log
 *.pyc
-tools/cripaktools/
+tools/CriPakTools.exe
 data/
 src/build/
 src/dist/
 dist/
 random_tests/
 src/twobyte.txt
+*.obj
