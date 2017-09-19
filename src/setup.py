@@ -12,15 +12,11 @@ def numpy_dll_paths_fix():
         for item in filenames:
             if item.endswith('.dll'):
                 paths.add(dirpath)
-
-    sys.path.append(*list(paths))
+    if paths:
+        sys.path.append(*list(paths))
 
 numpy_dll_paths_fix()
 
-setup(console=['dat_unpack.py'],
-      options={"py2exe": {"compressed": 1, "optimize": 2, "bundle_files": 1}},
-      zipfile=None)
-
-setup(console=['wmb_parser.py'],
-      options={"py2exe": {"compressed": 1, "optimize": 2, "bundle_files": 1}},
+setup(console=['user_main.py'],
+      options={"py2exe": {"compressed": 1, "optimize": 2, "bundle_files": 1, "excludes": ['Tkconstants', 'Tkinter']}},
       zipfile=None)

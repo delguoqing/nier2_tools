@@ -1,7 +1,6 @@
 import os
 import struct
 import collections
-import struct
 import math
 import numpy
 
@@ -239,72 +238,6 @@ def dump_atlas_layout_use_mapping(polys, mapping, out_fname, ref_textures=None):
 		path, ext = os.path.splitext(out_fname)
 		ref_tex = ref_textures and ref_textures[grp_idx] or None
 		_dump_atlas_layout(polys, "%s%d%s" % (path, grp_idx, ext), ref_tex)
-	
-def _dump_atlas_layout(polys, out_fname, ref_tex=None):
-	import cairo
-	min_x = min_y = 0
-	max_x = max_y = 0
-	for fvals in polys:
-		min_x = min(min_x, min(fvals[0: len(fvals): 2]))
-		max_x = max(max_x, max(fvals[0: len(fvals): 2]))
-		min_y = min(min_y, min(fvals[1: len(fvals): 2]))
-		max_y = max(max_y, max(fvals[1: len(fvals): 2]))
-	
-	WIDTH, HEIGHT = int(max_x - min_x), int(max_y - min_y)
-	
-	surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, WIDTH, HEIGHT)
-	ctx = cairo.Context(surface)
-
-	# paint background
-	ctx.set_source_rgba(1.0, 1.0, 1.0, 0.0) # white
-	ctx.rectangle(0, 0, WIDTH, HEIGHT)
-	ctx.set_line_width(1.5)
-	ctx.fill()
-
-	colors = (
-		(1.0, 0.0, 0.0),
-		(0.0, 1.0, 0.0),
-		(0.0, 0.0, 1.0),
-		(0.0, 1.0, 1.0),
-		(1.0, 1.0, 0.0),
-		(1.0, 0.0, 1.0),
-		(1.0, 0.5, 0.5),
-		(0.5, 0.5, 1.0),
-		(0.5, 1.0, 0.5),
-	)
-	
-	for i, fvals in enumerate(polys):
-	
-		fvals = list(fvals)
-		for j in xrange(0, len(fvals), 2):
-			x, y = fvals[j: j + 2]
-			fvals[j] = x - min_x
-			fvals[j + 1] = y - min_y
-			
-		x0, y0 = fvals[0:2]
-		x1, y1 = fvals[2:4]
-		ctx.move_to(x0, y0)
-		ctx.line_to(x1, y1)
-		col = colors[i % len(colors)]
-		ctx.set_source_rgb(*col)
-		for j in xrange(4, len(fvals), 2):
-			x2, y2 = fvals[j: j + 2]
-			ctx.move_to(x2, y2)
-			ctx.line_to(x0, y0)
-			ctx.move_to(x2, y2)
-			ctx.line_to(x1, y1)
-			x1, y1 = x2, y2
-		ctx.stroke()
-
-	surface.write_to_png(out_fname)
-	
-	# mix texture
-	if ref_tex:
-		import Image
-		ref_img = Image.open(ref_tex)
-		layout_img = Image.open(out_fname)
-		ref_img.paste(layout_img, (0, 0), layout_img)
-		ref_img.save(out_fname)
 		
 def point_in_quad(x, y, quad_pos):
 	p = numpy.array((x, y, 0))

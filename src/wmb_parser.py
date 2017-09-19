@@ -7,8 +7,17 @@ import math
 import json
 import zlib
 import test_bone
+import struct
 
+TEST_WMB_MOD = True
+
+BLOCK_OFFSET = 0x28	# offset for block (offset, count) pairs
+DATA_OFFSET = 0x88	# offset for real block data
+MAX_POSSIBLE_BLOCK_NUMBER = (DATA_OFFSET - BLOCK_OFFSET) / 8
+		
 class WMB(object):
+	
+	FOURCC = "WMB3"
 	
 	def is_supported_version(self):
 		return self.version == 0x20160116
@@ -18,20 +27,25 @@ class WMB(object):
 	
 	def read_header(self, wmb):
 		FOURCC = wmb.get("4s")
-		assert FOURCC == "WMB3", "not a WMB3 file!"
+		assert FOURCC == self.FOURCC, "not a WMB3 file!"
 		self.version = wmb.get("I")
 		assert self.version in self.valid_versions()
 		# most wmb has a version of 0x20160116, so I just ignore them a.t.m
 		if not self.is_supported_version():
 			print "old version is ignored a.t.m"
 			return
-
-		assert wmb.get("I") == 0
+		dummy = wmb.get("I")
+		assert dummy == 0
 		
 		self.flags = wmb.get("I")
 			
 		self.bounding_box = wmb.get("6f")	# x,y,z,w,h,d
 	
+		print FOURCC
+		print "version", hex(self.version)
+		print "flags", hex(self.flags)
+		print "bbox", self.bounding_box
+		
 		# subblocks
 		# dummy.wmb is of size 0x88, which tells us the header size
 		subblock_num = (0x88 - 0x28) / 0x8
@@ -87,9 +101,84 @@ class WMB(object):
 		self.bonemap = bonemap
 		self.materials = mats
 		
+		# save raw data for each block, so that we I can focus on modding
+		# interesting blocks while leaving other blocks intact without needing
+		# to write serialization code for them
+		self.raw_data = [""] * MAX_POSSIBLE_BLOCK_NUMBER
+		block_offset_to_index = {}
+		all_offsets = []
+		for i, (block_offset, count) in enumerate(subblocks):
+			if block_offset == 0:
+				continue
+			block_offset_to_index[block_offset] = i
+			all_offsets.append(block_offset)
+		all_offsets.sort()
+		for i, block_offset in enumerate(all_offsets):
+			j = block_offset_to_index[block_offset]
+			if i == len(all_offsets) - 1:
+				size = wmb.size - block_offset
+			else:
+				size = all_offsets[i + 1] - block_offset
+			wmb.seek(block_offset)
+			self.raw_data[j] = wmb.get_raw(size)
+		
 	def get_vertex_index_size(self):
 		return (self.flags & 0x8) and 4 or 2
 	
+	def _get_pack(self, fp):
+		def pack(fmt, *args):
+			fp.write(struct.pack(fmt, *args))
+		return pack
+	
+	def write_header(self, fp):
+		pack = self._get_pack(fp)
+		fp.write("WMB3")
+		# version, dummy, flags
+		pack("<III", self.version, 0, self.flags)
+		pack("<6f", *self.bounding_box)
+		
+	# fp: output file object
+	def write(self, fp_out, fp_in):
+		self.write_header(fp_out)
+		
+		pack = self._get_pack(fp_out)
+		block_start = BLOCK_OFFSET
+		data_start = DATA_OFFSET
+		data_off = data_start	# write offset for real block data
+		
+		def write_block_info(i, off, count):
+			saved_offset = fp_out.tell()
+			fp_out.seek(block_start + i * 8)
+			pack("<II", off, count)
+			fp_out.seek(saved_offset)
+			return off != 0
+			
+		# pad zeros for offset table
+		header_size = fp_out.tell()
+		assert header_size == block_start
+		offset_table_size = data_start - block_start
+		fp_out.write("\x00" * offset_table_size)
+		
+		# -- write blocks --
+		write_funcs = []
+		for i in xrange(MAX_POSSIBLE_BLOCK_NUMBER):
+			write_funcs.append(self._get_write_default(i))
+		for i, func in enumerate(write_funcs):
+			off = fp_out.tell()
+			n = func(fp_out)
+			# update offset table
+			write_block_info(i, off, n)
+			
+	def _get_write_default(self, i):
+		def _write_default(fp_out):
+			fp_out.write(self.raw_data[i])
+			n = self.subblocks[i][1]
+			return n
+		return _write_default
+	
+	def _write_geo(self, fp_out):
+		return 0
+		
 class SubMeshInfo(object):
 	
 	def read(self, wmb):
@@ -295,7 +384,7 @@ class Material(object):
 	
 #DATA_ROOT = r"G:\game\nier_automata\3DMGAME-NieR.Automata.Day.One.Edition-3DM\cpk_unpacked"
 DATA_ROOT = r"..\data"
-DUMP_OBJ = True
+DUMP_OBJ = False
 DUMP_MAX_LOD = 0
 DUMP_GTB = False
 DUMP_GTB_COMPRESS = True
@@ -419,6 +508,8 @@ class BoneInfo(object):
 		
 	def read(self, wmb):
 		self.bone_id = wmb.get("H")
+		if self.bone_id & 0xFF == 64:
+			print "A2 offset = ", hex(wmb.offset)
 		self.parent_idx = wmb.get("h")
 		self.local_pos = wmb.get("3f")
 		self.local_rot = wmb.get("3f")
@@ -586,7 +677,7 @@ def test(path):
 	for fpath in util.iter_path(path):
 		if fpath.endswith(".wmb"):
 			do_test(fpath)
-	
+
 def test_rand(root):
 	fpath = random.choice(list(util.iter_path(root)))
 	do_test(fpath)
@@ -756,7 +847,22 @@ def dump_wmb(wmb, outpath="a.gtb"):
 	fp.close()
 
 if __name__ == '__main__':
-	if len(sys.argv) == 1:
+	if TEST_WMB_MOD:
+		
+		in_path = sys.argv[1]
+		out_path = os.path.split(in_path)[1]
+		
+		fp_in = open(in_path, "rb")
+		wmb = util.get_getter(fp_in, "<")
+		wmb = parse(wmb)
+		
+		fp_out = open(out_path, "wb")
+		wmb.write(fp_out, fp_in);
+		
+		fp_in.close()
+		fp_out.close()
+		
+	elif len(sys.argv) == 1:
 		test(DATA_ROOT)
 	elif len(sys.argv) == 2:
 		if sys.argv[1] == "random":
