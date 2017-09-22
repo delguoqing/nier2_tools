@@ -104,6 +104,17 @@ class WMB(object):
 		# save raw data for each block, so that we I can focus on modding
 		# interesting blocks while leaving other blocks intact without needing
 		# to write serialization code for them
+		
+		# TODO: block info order should be predefined
+		# I should not try to calculate it!
+		# Because there're optional blocks, which we don't know when to write it!
+		
+		# TODO: I should start a wmb_writer class in a new file!
+		self.block_info_order = []	# maybe it is not neccessary, but I want the output file to
+									# be as close as possible to the original file. The data
+									# order is not exactly as the block info order, so we need
+									# to save that order for later use.
+		
 		self.raw_data = [""] * MAX_POSSIBLE_BLOCK_NUMBER
 		block_offset_to_index = {}
 		all_offsets = []
@@ -121,6 +132,7 @@ class WMB(object):
 				size = all_offsets[i + 1] - block_offset
 			wmb.seek(block_offset)
 			self.raw_data[j] = wmb.get_raw(size)
+			self.block_info_order.append(j)
 		
 	def get_vertex_index_size(self):
 		return (self.flags & 0x8) and 4 or 2
@@ -141,17 +153,8 @@ class WMB(object):
 	def write(self, fp_out, fp_in):
 		self.write_header(fp_out)
 		
-		pack = self._get_pack(fp_out)
 		block_start = BLOCK_OFFSET
 		data_start = DATA_OFFSET
-		data_off = data_start	# write offset for real block data
-		
-		def write_block_info(i, off, count):
-			saved_offset = fp_out.tell()
-			fp_out.seek(block_start + i * 8)
-			pack("<II", off, count)
-			fp_out.seek(saved_offset)
-			return off != 0
 			
 		# pad zeros for offset table
 		header_size = fp_out.tell()
@@ -162,19 +165,32 @@ class WMB(object):
 		# -- write blocks --
 		write_funcs = []
 		for i in xrange(MAX_POSSIBLE_BLOCK_NUMBER):
-			write_funcs.append(self._get_write_default(i))
+			write_funcs.append(self.get_default_block_body_writer(i))
 		for i, func in enumerate(write_funcs):
-			off = fp_out.tell()
-			n = func(fp_out)
-			# update offset table
-			write_block_info(i, off, n)
-			
-	def _get_write_default(self, i):
-		def _write_default(fp_out):
-			fp_out.write(self.raw_data[i])
-			n = self.subblocks[i][1]
+			block_info_index = self.block_info_order[i]
+			block_info_writer = self.get_block_info_writer(block_info_index)
+			self.append_write_block(fp_out, func, block_info_writer)
+				
+	def get_default_block_body_writer(self, i):
+		def write(fp):
+			fp.write(self.raw_data[i])
+			j = self.block_info_order[i]
+			n = self.subblocks[j][1]
 			return n
-		return _write_default
+		return write
+		
+	def get_block_info_writer(self, i):
+		def write(fp, offset, count):
+			fp.seek(BLOCK_OFFSET + i * 8, os.SEEK_SET)
+			fp.write(struct.pack("<II", offset, count))
+		return write
+		
+	# helper function: write a block and its header
+	def append_write_block(self, fp, block_writer, info_writer):
+		fp.seek(0, os.SEEK_END)
+		start_offset = fp.tell()
+		count = block_writer(fp)
+		info_writer(fp, start_offset, count)
 	
 	def _write_geo(self, fp_out):
 		return 0
