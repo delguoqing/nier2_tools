@@ -16,3 +16,5 @@ WMB_BLOCK_ORDER = [
 	8,	# MeshGrpMat
 	11,	# Unk3
 ]
+
+WMB_BLOCK_COUNT = len(WMB_BLOCK_ORDER)
