@@ -152,6 +152,14 @@ class WMB(object):
 		|...block data2...|
 		|.................|
 		|...block dataN...|
+
+		Modding Note about offset and block size:
+		Because this format uses stores global offset directly in files, will any block changes its size,
+		any block after that block will have to FIX their offset, which is a pain in ass if we don't know
+		the format completely. So, for mesh modding, I'll just decide to keep the block size intact:
+		If the new block is smaller than the original one, the file will be padded with zeros.
+		If the new block is larger than the original one, I'll just append that data in the end of the file.
+		I hope that will work.
 		"""
 		self.write_header(fp_out)
 		
@@ -230,10 +238,26 @@ class GeoBuffer(object):
 	
 	def __init__(self, isize):
 		self.isize = isize
-		
+
 	def read(self, wmb):
+		"""
+		:param wmb:
+		:return:
+
+		Memory Layout:
+		|vb0_offset,	vb1_offset,	vb2_offset,	vb3_offset|
+		|vb0_stride,	vb1_stride,	vb2_stride,	vb3_stride|
+		|vnum,			unk,		ib_offset,	inum|
+		|...................vb0......................|
+		|...................vb1......................|
+		|...................vb2......................|
+		|...................vb3......................|
+		|...................vb4......................|
+		|...................ib......................|
+		"""
 		self._params = wmb.get("12I")
 		self.vb_offsets = self._params[:4]
+		# a maximum of 4 vertex buffers are allowed, but at most 2 are used in this game
 		assert self.vb_offsets[2] == 0 and self.vb_offsets[3] == 0
 		self.vb_strides = self._params[4:8]
 		assert self.vb_strides[2] == 0 and self.vb_strides[3] == 0
@@ -298,7 +322,6 @@ class GeoBuffer(object):
 			})
 			
 		return vertices
-		
 		
 class LodInfo(object):
 	
