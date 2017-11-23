@@ -12,9 +12,9 @@ import const
 
 TEST_WMB_MOD = True
 
-BLOCK_OFFSET = 0x28	# offset for block (offset, count) pairs
+ENTRY_OFFSET = 0x28	# offset for block (offset, count) pairs
 DATA_OFFSET = 0x88	# offset for real block data
-MAX_POSSIBLE_BLOCK_NUMBER = (DATA_OFFSET - BLOCK_OFFSET) / 8
+MAX_POSSIBLE_BLOCK_NUMBER = (DATA_OFFSET - ENTRY_OFFSET) / 8
 		
 class WMB(object):
 	
@@ -49,9 +49,9 @@ class WMB(object):
 		
 		# subblocks
 		# dummy.wmb is of size 0x88, which tells us the header size
-		subblock_num = (0x88 - 0x28) / 0x8
+		subblock_num = MAX_POSSIBLE_BLOCK_NUMBER
 		subblocks = []
-		subblock_desc = ["Bone", "Unk", "Geo", "SubMesh", "Lod", "Unk", "BoneMap", "Boneset", "Mat", "MeshGroup", "MeshGrpMat", "Unk"] 
+		subblock_desc = ["Bone", "Unk1", "Geo", "SubMesh", "Lod", "Unk2", "BoneMap", "Boneset", "Mat", "MeshGroup", "MeshGrpMat", "Unk3"]
 		for i in xrange(subblock_num):
 			subblocks.append(wmb.get("2I"))
 			if i < len(subblock_desc):
@@ -139,54 +139,76 @@ class WMB(object):
 		pack("<III", self.version, 0, self.flags)
 		pack("<6f", *self.bounding_box)
 		
-	# fp: output file object
 	def write(self, fp_out, fp_in):
+		"""
+		:param fp_out: output file object
+		:param fp_in: input file object
+		:return:void
+
+		Memory layout:
+		|......header.....|
+		|..block entries..|		<--- block start
+		|...block data1...|		<--- data_start
+		|...block data2...|
+		|.................|
+		|...block dataN...|
+		"""
 		self.write_header(fp_out)
 		
-		block_start = BLOCK_OFFSET
+		entry_start = ENTRY_OFFSET
 		data_start = DATA_OFFSET
-			
+
 		# pad zeros for offset table
 		header_size = fp_out.tell()
-		assert header_size == block_start
-		offset_table_size = data_start - block_start
+		assert header_size == entry_start
+		offset_table_size = data_start - entry_start
 		fp_out.write("\x00" * offset_table_size)
 		
 		# -- write blocks --
 		write_funcs = []
 		for i in xrange(const.WMB_BLOCK_COUNT):
-			write_funcs.append(self.get_default_block_body_writer(i))
-		# override with custom write_funcs here
+			write_funcs.append(self.get_default_block_data_writer(i))
+		# override with custom write_funcs BEGIN
+		write_funcs[const.WMB_BLK_GEO] = self._write_geo
+		# override with custom write_funcs END
 
-		# bi -- block index
-		# bii -- block info index
-		for bi, bii in enumerate(const.WMB_BLOCK_ORDER):
-			biwriter = self.get_block_info_writer(bii)
-			bwriter = write_funcs(bii)
-			self.append_write_block(fp_out, bwriter, biwriter)
+		# padding to 0x10
+		padding = (DATA_OFFSET % 0x10)
+		if padding > 0:
+			padding = 0x10 - padding
+			fp_out.write("\x00" * padding)
 
-	def get_default_block_body_writer(self, i):
+		# i -- corresponding entry index
+		for i in const.ORDER_D2E:
+			entry_writer = self.get_block_entry_writer(i)
+			data_writer = write_funcs[i]
+			self.append_write_block(fp_out, data_writer, entry_writer)
+
+	def get_default_block_data_writer(self, i):
 		def write(fp):
 			fp.write(self.raw_data[i])
 			n = self.subblocks[i][1]
 			return n
 		return write
 		
-	def get_block_info_writer(self, i):
+	def get_block_entry_writer(self, i):
 		def write(fp, offset, count):
-			fp.seek(BLOCK_OFFSET + i * 8, os.SEEK_SET)
-			fp.write(struct.pack("<II", offset, count))
+			if count > 0:
+				fp.seek(ENTRY_OFFSET + i * 8, os.SEEK_SET)
+				fp.write(struct.pack("<II", offset, count))
 		return write
 		
 	# helper function: write a block and its header
-	def append_write_block(self, fp, block_writer, info_writer):
+	def append_write_block(self, fp, data_writer, entry_writer):
 		fp.seek(0, os.SEEK_END)
 		start_offset = fp.tell()
-		count = block_writer(fp)
-		info_writer(fp, start_offset, count)
+		count = data_writer(fp)
+		entry_writer(fp, start_offset, count)
 	
-	def _write_geo(self, fp_out):
-		return 0
+	def _write_geo(self, fp):
+		fp.write(self.raw_data[const.WMB_BLK_GEO])
+		n = self.subblocks[const.WMB_BLK_GEO][1]
+		return n
 		
 class SubMeshInfo(object):
 	
@@ -306,7 +328,7 @@ class LodSubmeshInfo(object):
 		self.mesh_group_index = wmb.get("I")
 		self.mat_index = wmb.get("I")
 		unk0 = wmb.get("i")
-		assert unk0 == -1
+		assert unk0 == -1, ("unk0=%d" % unk0)
 		# no use, redundant
 		self.mesh_group_mat_pair_index = wmb.get("I")
 		unk1 = wmb.get("i")	# index into the last block, element size = 0x18

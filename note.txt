@@ -1,0 +1,2 @@
+1.use this fork to unpack cpk => https://github.com/wmltogether/CriPakTools
+2.data019.cpk have filename with shift-jis encoding, which makes CriPakTools crash. We can use GUI version, and select encoding manually
