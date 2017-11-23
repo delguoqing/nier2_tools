@@ -147,7 +147,7 @@ class WMB(object):
 
 		Memory layout:
 		|......header.....|
-		|..block entries..|		<--- block start
+		|..block entries..|		<--- entry start
 		|...block data1...|		<--- data_start
 		|...block data2...|
 		|.................|
@@ -214,8 +214,91 @@ class WMB(object):
 		entry_writer(fp, start_offset, count)
 	
 	def _write_geo(self, fp):
-		fp.write(self.raw_data[const.WMB_BLK_GEO])
+		orig_size = len(self.raw_data[const.WMB_BLK_GEO])
+		base_offset = fp.tell()
 		n = self.subblocks[const.WMB_BLK_GEO][1]
+		entry_size = n * 0x30
+		data_offset = base_offset + entry_size
+		stride = 0x1C
+		vnum = 8
+		inum = 36
+		vbsize = vnum * stride
+		ibsize = self.get_vertex_index_size() * inum
+		# write entry
+		for i in xrange(n):
+			vb_offset = data_offset + i * (vbsize + ibsize)
+			fp.write(struct.pack("<IIII", vb_offset, 0, 0, 0))
+			fp.write(struct.pack("<IIII", stride, 0, 0, 0))
+			ib_offset = vb_offset + vbsize
+			fp.write(struct.pack("<IIII", vnum, 0, ib_offset, inum))
+		assert fp.tell() == data_offset, "write entry error! size not match!"
+		# write data
+		d = 10
+		for i in xrange(n):
+			fp.write(struct.pack("<3f", -d, -d, -d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", -d, -d, d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", -d, d, -d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", -d, d, d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", d, -d, -d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", d, -d, d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", d, d, -d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			fp.write(struct.pack("<3f", d, d, d))	# position
+			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
+			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
+			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
+			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
+			
+			# write index buffer
+			if self.get_vertex_index_size() == 2:
+				fmt = "<36H"
+			else:
+				fmt = "<36I"
+			fp.write(struct.pack(fmt,
+								 0, 1, 2, 3, 2, 1,
+								 4, 5, 6, 7, 6, 5,
+								 0, 1, 4, 5, 4, 1,
+								 2, 3, 6, 7, 6, 3,
+								 2, 1, 6, 5, 6, 1,
+								 0, 1, 6, 7, 6, 1))
+				
+		# padding zeros
+		padding_size = orig_size - entry_size - (vbsize + ibsize) * n
+		fp.write("\x00" * padding_size)
 		return n
 		
 class SubMeshInfo(object):
