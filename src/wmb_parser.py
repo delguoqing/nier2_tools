@@ -10,7 +10,7 @@ import test_bone
 import struct
 import const
 
-TEST_WMB_MOD = True
+TEST_WMB_MOD = False
 
 ENTRY_OFFSET = 0x28	# offset for block (offset, count) pairs
 DATA_OFFSET = 0x88	# offset for real block data
@@ -123,6 +123,7 @@ class WMB(object):
 				size = all_offsets[i + 1] - block_offset
 			wmb.seek(block_offset)
 			self.raw_data[j] = wmb.get_raw(size)
+		self.append_data = ""
 
 	def get_vertex_index_size(self):
 		return (self.flags & 0x8) and 4 or 2
@@ -176,9 +177,6 @@ class WMB(object):
 		write_funcs = []
 		for i in xrange(const.WMB_BLOCK_COUNT):
 			write_funcs.append(self.get_default_block_data_writer(i))
-		# override with custom write_funcs BEGIN
-		write_funcs[const.WMB_BLK_GEO] = self._write_geo
-		# override with custom write_funcs END
 
 		# padding to 0x10
 		padding = (DATA_OFFSET % 0x10)
@@ -191,6 +189,9 @@ class WMB(object):
 			entry_writer = self.get_block_entry_writer(i)
 			data_writer = write_funcs[i]
 			self.append_write_block(fp_out, data_writer, entry_writer)
+			
+		# append additional data
+		fp_out.write(self.append_data)
 
 	def get_default_block_data_writer(self, i):
 		def write(fp):
@@ -213,93 +214,39 @@ class WMB(object):
 		count = data_writer(fp)
 		entry_writer(fp, start_offset, count)
 	
-	def _write_geo(self, fp):
-		orig_size = len(self.raw_data[const.WMB_BLK_GEO])
-		base_offset = fp.tell()
-		n = self.subblocks[const.WMB_BLK_GEO][1]
-		entry_size = n * 0x30
-		data_offset = base_offset + entry_size
-		stride = 0x1C
-		vnum = 8
-		inum = 36
-		vbsize = vnum * stride
-		ibsize = self.get_vertex_index_size() * inum
-		# write entry
-		for i in xrange(n):
-			vb_offset = data_offset + i * (vbsize + ibsize)
-			fp.write(struct.pack("<IIII", vb_offset, 0, 0, 0))
-			fp.write(struct.pack("<IIII", stride, 0, 0, 0))
-			ib_offset = vb_offset + vbsize
-			fp.write(struct.pack("<IIII", vnum, 0, ib_offset, inum))
-		assert fp.tell() == data_offset, "write entry error! size not match!"
-		# write data
-		d = 10
-		for i in xrange(n):
-			fp.write(struct.pack("<3f", -d, -d, -d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", -d, -d, d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", -d, d, -d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", -d, d, d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", d, -d, -d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", d, -d, d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", d, d, -d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			fp.write(struct.pack("<3f", d, d, d))	# position
-			fp.write(struct.pack("<4B", 20, 30, 40, 0))	# normal + AO?
-			fp.write(struct.pack("<4B", 0, 0, 0, 0))	# uv?
-			fp.write(struct.pack("<4B", 1, 0, 0, 0))	# bone indices
-			fp.write(struct.pack("<4B", 255, 0, 0, 0))	# bone weights
-			
-			# write index buffer
-			if self.get_vertex_index_size() == 2:
-				fmt = "<36H"
-			else:
-				fmt = "<36I"
-			fp.write(struct.pack(fmt,
-								 0, 1, 2, 3, 2, 1,
-								 4, 5, 6, 7, 6, 5,
-								 0, 1, 4, 5, 4, 1,
-								 2, 3, 6, 7, 6, 3,
-								 2, 1, 6, 5, 6, 1,
-								 0, 1, 6, 7, 6, 1))
-				
-		# padding zeros
-		padding_size = orig_size - entry_size - (vbsize + ibsize) * n
-		fp.write("\x00" * padding_size)
-		return n
+	def replace_submesh(index, vertices, indices):
+		"""
+		Each LOD level contains several submesh. This is the smallest piece we can replace.
+		In order to do this, we have to do the following:
+		1.create new vertex buffer and index buffer. These buffers should include the original
+		buffer data, and append new ones. Because one buffer may be referenced by multiple submesh.
+		so we have to add buffers to the end of the file.
+		2.modify the geometry block to reference the new vertex buffer and index buffer.
+		3.modify the submesh info
+		"""
+		def ser_vb():
+			pass
+		def ser_ib():
+			pass
+		# create vertex buffer and index buffer
+		vb = ser_vb(vertices)
+		ib = ser_ib(indices)
+		self.append_data += vb + ib
+		# Modify geometry buffer
+		submesh_info = self.submesh_infos[index]
+		geo_buffer = self.geo_buffers[submesh_info.geo_idx]
+		# Modify submesh info
+		vnum = len(vertices)
+		inum = len(indices)
+		vstart = geo_buffer.vnum	# append to the end of the original buffer
+		istart = geo_buffer.inum
+		prim_num = inum / 3
+		submesh_info_dump = struct.pack("<IiIIIII", submesh_info.geo_idx,
+										submesh_info.boneset_idx, vstart, istart, vnum, inum,
+										prim_num)
+		sz = len(submesh_info_dump)
+		self.raw_data[const.WMB_BLK_SUBMESH][index * sz: index * sz + sz] = submesh_info_dump
+	
 		
 class SubMeshInfo(object):
 	
@@ -523,7 +470,7 @@ class Material(object):
 DATA_ROOT = r"..\data"
 DUMP_OBJ = False
 DUMP_MAX_LOD = 0
-DUMP_GTB = False
+DUMP_GTB = True
 DUMP_GTB_COMPRESS = True
 
 def parse(wmb):
@@ -892,6 +839,8 @@ def export_gtb(wmb, lod=0):
 	for i, lod_submesh_info in enumerate(lod_info.submesh):
 		submesh_index = i + lod_info.submesh_start
 		submesh_info = wmb.submesh_infos[submesh_index]
+		# There're two geometry block indices, one is not neccessary
+		assert submesh_info.geo_idx == lod_submesh_info.geo_index, "This should equal!"
 		geo_buffer = wmb.geo_buffers[lod_submesh_info.geo_index]
 		mesh_group_info = wmb.mesh_group_infos[lod_submesh_info.mesh_group_index]
 		
