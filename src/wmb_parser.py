@@ -123,7 +123,9 @@ class WMB(object):
 				size = all_offsets[i + 1] - block_offset
 			wmb.seek(block_offset)
 			self.raw_data[j] = wmb.get_raw(size)
+
 		self.append_data = ""
+		self.size = wmb.size
 
 	def get_vertex_index_size(self):
 		return (self.flags & 0x8) and 4 or 2
@@ -224,17 +226,58 @@ class WMB(object):
 		2.modify the geometry block to reference the new vertex buffer and index buffer.
 		3.modify the submesh info
 		"""
-		def ser_vb():
-			pass
-		def ser_ib():
-			pass
-		# create vertex buffer and index buffer
-		vb = ser_vb(vertices)
-		ib = ser_ib(indices)
-		self.append_data += vb + ib
-		# Modify geometry buffer
 		submesh_info = self.submesh_infos[index]
 		geo_buffer = self.geo_buffers[submesh_info.geo_idx]
+		isize = self.get_vertex_index_size()	# how many bytes to represent a vertex index
+		old_vnum = geo_buffer.vnum
+		vnum_added = len(vertices)
+		new_vnum = old_vnum + vnum_added
+		if new_vnum >= (1 << (isize * 8)):
+			raise Exception("Too many vertex ..., this is not supported!")
+		if geo_buffer.vb_strides[0] != 0x1C:
+			raise Exception("vertex buffer format not supported. stride=0x%x" % geo_buffer.vb_strides[0])
+		
+		def ser_vertex(v):
+			result = []
+			result.append(struct.pack("<3f", v["position"][0], v["position"][1], v["position"][2]))
+			normal = map(lambda nx: (nx * 255.0 + 255.0) / 2.0, v["normal"])
+			result.append(struct.pack("4B", normal[0], normal[1], normal[2], 0))
+			uv = map(lambda u: numpy.float16(u).view('H'), v["uv"])
+			result.append(struct.pack("<2H", uv[0], uv[1]))
+			result.append(struct.pack("4B", v["bone_indices"][0], v["bone_indices"][1], v["bone_indices"][2],
+									  v["bone_indices"][3]))
+			result.append(struct.pack("4B", v["bone_weights"][0], v["bone_weights"][1], v["bone_weights"][2],
+									  v["bone_weights"][3]))
+			return "".join(result)
+
+		# create vertex buffer and index buffer
+		base_offset = self.size + len(self.append_data)	# offset for new buffers
+		old_vbufs = geo_buffer.vbufs
+		old_indices = geo_buffer.indices
+		# fixing vertex buffer
+		new_vbufs = [old_vbufs[0] + "".join(map(ser_vertex, vertices))]	# append 1st vbuf
+		for i in xrange(1, len(old_vbufs)):				# padding rest vbuf, because we don't know the format yet
+			new_vbufs.append(old_vbufs[i] + "\x00" * (vnum_added * geo_buffer.vb_strides[i]))
+		# fixing index buffer
+		new_indices = old_indices + map(lambda v: v + old_vnum, indices)
+		if isize == 2:
+			fmt = "<H"
+		else:
+			fmt = "<I"
+		new_ib = "".join(map(lambda v: struct.pack(fmt, v), new_indices))
+		self.append_data += ("".join(new_vbufs)) + new_ib
+		# Modify geometry buffer
+		curr_offset = base_offset
+		vb_offsets = [0] * 4
+		for i in xrange(len(new_vbufs)):
+			vb_offsets[i] = curr_offset
+			curr_offset += len(new_vbufs[i])
+		vb_strides = geo_buffer.vb_strides		# use old stride
+		vnum = new_vnum
+		unk = 0
+		ib_offset = curr_offset
+		inum = geo_buffer.inum + len(vertices)
+		dump = create_geo_buffer_dump(vb_offsets, vb_strides, vnum, unk, ib_offset, inum)
 		# Modify submesh info
 		vnum = len(vertices)
 		inum = len(indices)
@@ -246,7 +289,11 @@ class WMB(object):
 										prim_num)
 		sz = len(submesh_info_dump)
 		self.raw_data[const.WMB_BLK_SUBMESH][index * sz: index * sz + sz] = submesh_info_dump
-	
+
+def create_geo_buffer_dump(vb_offsets, vb_strides, vnum, unk, ib_offset, inum):
+	dump = struct.pack("<IIIIIIIIIIII", vb_offsets[0], vb_offsets[1], vb_offsets[2], vb_offsets[3], vb_strides[0],
+					   vb_strides[1], vb_strides[2], vb_strides[3], vnum, unk, ib_offset, inum)
+	return dump
 		
 class SubMeshInfo(object):
 	
