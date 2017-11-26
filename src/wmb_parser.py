@@ -9,8 +9,7 @@ import zlib
 import test_bone
 import struct
 import const
-
-TEST_WMB_MOD = False
+import argparse
 
 ENTRY_OFFSET = 0x28	# offset for block (offset, count) pairs
 DATA_OFFSET = 0x88	# offset for real block data
@@ -99,7 +98,7 @@ class WMB(object):
 		self.bone_infos = bone_infos
 		self.mesh_group_infos = mesh_group_infos
 		self.bonesets = bonesets
-		self.bonemap = bonemap
+		self.bonemap = bonemap	# {index => id}
 		self.materials = mats
 		
 		# save raw data for each block, so that we I can focus on modding
@@ -216,7 +215,13 @@ class WMB(object):
 		count = data_writer(fp)
 		entry_writer(fp, start_offset, count)
 	
-	def replace_submesh(index, vertices, indices):
+	def get_bone_index_by_bone_id(self, bone_id):
+		for _i, _id in enumerate(self.bonemap):
+			if bone_id == _id:
+				return _i
+		return -1
+			
+	def replace_submesh(self, index, vertices, indices):
 		"""
 		Each LOD level contains several submesh. This is the smallest piece we can replace.
 		In order to do this, we have to do the following:
@@ -244,14 +249,32 @@ class WMB(object):
 			result.append(struct.pack("4B", normal[0], normal[1], normal[2], 0))
 			uv = map(lambda u: numpy.float16(u).view('H'), v["uv"])
 			result.append(struct.pack("<2H", uv[0], uv[1]))
-			result.append(struct.pack("4B", v["bone_indices"][0], v["bone_indices"][1], v["bone_indices"][2],
-									  v["bone_indices"][3]))
+			bone_indices = [0] * 4
+			for i in xrange(4):
+				if v["bone_weights"][i] == 0:
+					break
+				bone_id = v["bone_ids"][i]
+				
+				if submesh_info.boneset_idx == -1:
+					index_in_boneset = -1
+				else:
+					bone_index = self.get_bone_index_by_bone_id(bone_id)
+					index_in_boneset = -1
+					for _i, _bone_index in enumerate(self.bonesets[submesh_info.boneset_idx]):
+						if bone_index == _bone_index:
+							index_in_boneset = _i
+							break
+				if index_in_boneset == -1:
+					v["bone_weights"] = 0
+				else:
+					bone_indices[i] = index_in_boneset
+			result.append(struct.pack("4B", bone_indices[0], bone_indices[1], bone_indices[2],
+									  bone_indices[3]))
 			result.append(struct.pack("4B", v["bone_weights"][0], v["bone_weights"][1], v["bone_weights"][2],
 									  v["bone_weights"][3]))
 			return "".join(result)
 
 		# create vertex buffer and index buffer
-		base_offset = self.size + len(self.append_data)	# offset for new buffers
 		old_vbufs = geo_buffer.vbufs
 		old_indices = geo_buffer.indices
 		# fixing vertex buffer
@@ -259,14 +282,16 @@ class WMB(object):
 		for i in xrange(1, len(old_vbufs)):				# padding rest vbuf, because we don't know the format yet
 			new_vbufs.append(old_vbufs[i] + "\x00" * (vnum_added * geo_buffer.vb_strides[i]))
 		# fixing index buffer
-		new_indices = old_indices + map(lambda v: v + old_vnum, indices)
+		new_indices = old_indices + tuple(map(lambda v: v + old_vnum, indices))
 		if isize == 2:
 			fmt = "<H"
 		else:
 			fmt = "<I"
 		new_ib = "".join(map(lambda v: struct.pack(fmt, v), new_indices))
+		base_offset = self.size + len(self.append_data)	# offset for new buffers
 		self.append_data += ("".join(new_vbufs)) + new_ib
 		# Modify geometry buffer
+		print ("Offset = 0x%x" % base_offset)
 		curr_offset = base_offset
 		vb_offsets = [0] * 4
 		for i in xrange(len(new_vbufs)):
@@ -274,10 +299,13 @@ class WMB(object):
 			curr_offset += len(new_vbufs[i])
 		vb_strides = geo_buffer.vb_strides		# use old stride
 		vnum = new_vnum
-		unk = 0
+		unk = geo_buffer.unk
 		ib_offset = curr_offset
-		inum = geo_buffer.inum + len(vertices)
+		inum = geo_buffer.inum + len(indices)
 		dump = create_geo_buffer_dump(vb_offsets, vb_strides, vnum, unk, ib_offset, inum)
+		sz = len(dump)
+		rdata = self.raw_data[const.WMB_BLK_GEO]
+		self.raw_data[const.WMB_BLK_GEO] = rdata[:submesh_info.geo_idx * sz] + dump + rdata[submesh_info.geo_idx * sz + sz:]
 		# Modify submesh info
 		vnum = len(vertices)
 		inum = len(indices)
@@ -288,7 +316,8 @@ class WMB(object):
 										submesh_info.boneset_idx, vstart, istart, vnum, inum,
 										prim_num)
 		sz = len(submesh_info_dump)
-		self.raw_data[const.WMB_BLK_SUBMESH][index * sz: index * sz + sz] = submesh_info_dump
+		rdata = self.raw_data[const.WMB_BLK_SUBMESH]
+		self.raw_data[const.WMB_BLK_SUBMESH] = rdata[:index * sz] + submesh_info_dump + rdata[index * sz + sz:]
 
 def create_geo_buffer_dump(vb_offsets, vb_strides, vnum, unk, ib_offset, inum):
 	dump = struct.pack("<IIIIIIIIIIII", vb_offsets[0], vb_offsets[1], vb_offsets[2], vb_offsets[3], vb_strides[0],
@@ -515,9 +544,7 @@ class Material(object):
 	
 #DATA_ROOT = r"G:\game\nier_automata\3DMGAME-NieR.Automata.Day.One.Edition-3DM\cpk_unpacked"
 DATA_ROOT = r"..\data"
-DUMP_OBJ = False
 DUMP_MAX_LOD = 0
-DUMP_GTB = True
 DUMP_GTB_COMPRESS = True
 
 def parse(wmb):
@@ -820,10 +847,11 @@ def do_test(fpath):
 	wmb = parse(wmb)
 	fp.close()
 	
-	if DUMP_GTB:
+	if args.dry_run:
+		return
+	if args.format == "gtb":
 		dump_wmb(wmb, outpath=fpath.replace(".wmb", ".gtb"))
-		
-	if DUMP_OBJ:
+	else:
 		for lodlv in xrange(DUMP_MAX_LOD + 1):
 			lod_info = wmb.lod_infos[lodlv]
 			for submesh_idx in xrange(lod_info.submesh_start, lod_info.submesh_start + lod_info.submesh_num):
@@ -980,25 +1008,41 @@ def dump_wmb(wmb, outpath="a.gtb"):
 	fp.close()
 
 if __name__ == '__main__':
-	if TEST_WMB_MOD:
+	parser = argparse.ArgumentParser(description="Nier2: Automata model tool.")
+	parser.add_argument("cmd", help="command you want to perform", choices=["parse", "mod"])
+	parser.add_argument("--wmb", action="store", dest="in_path", type=str, help="Input file(s). A file or a directory.")
+	parser.add_argument("--random", action="store_true", default=False)
+	parser.add_argument("--dry_run", action="store_true", default=False)
+	parser.add_argument("--format", action="store", type=str, choices=["gtb", "obj"], default="gtb")
+	parser.add_argument("--meshes", action="store", type=int, nargs="*", help="Indices of meshes that will be replaced")
+	parser.add_argument("--mesh_reps", action="store", type=str, nargs="*", help="json files which is the replacement of meshes.")
+	
+	args = parser.parse_args()
 		
-		in_path = sys.argv[1]
+	if args.cmd == "mod":
+		in_path = args.in_path
 		out_path = os.path.split(in_path)[1]
 		
 		fp_in = open(in_path, "rb")
 		wmb = util.get_getter(fp_in, "<")
 		wmb = parse(wmb)
 		
+		for i in xrange(len(args.meshes)):
+			index = args.meshes[i]
+			json_file = args.mesh_reps[i]
+			fjson = open(json_file, "r")
+			rep = json.load(fjson)
+			fjson.close()
+			wmb.replace_submesh(index, rep["vertices"], rep["indices"])
+		
 		fp_out = open(out_path, "wb")
 		wmb.write(fp_out, fp_in);
 		
 		fp_in.close()
 		fp_out.close()
-		
-	elif len(sys.argv) == 1:
+	elif args.random:
+		test_rand(DATA_ROOT)
+	elif args.in_path is None:
 		test(DATA_ROOT)
-	elif len(sys.argv) == 2:
-		if sys.argv[1] == "random":
-			test_rand(DATA_ROOT)
-		else:
-			test(sys.argv[1])
+	else:
+		test(args.in_path)
