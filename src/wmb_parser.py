@@ -427,6 +427,25 @@ class GeoBuffer(object):
 				"bone_weights": bone_weights,
 			})
 			
+		# second vertex buffer
+		vb = util.get_getter(self.vbufs[1], "<")
+		stride = self.vb_strides[1]
+		for i in xrange(self.vnum):
+			if self.unk == 10:
+				v1 = numpy.frombuffer(vb.get_raw(12), dtype=numpy.dtype("<f2"))
+				v2 = vb.get("I")
+				print ("%f,%f,%f,%f,0x%x" % (v1[0], v1[1], v1[2], v1[3], v2))
+			elif self.unk == 11:
+				v1 = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
+				v2 = vb.get("I")
+				v3 = numpy.frombuffer(vb.get_raw(12), dtype=numpy.dtype("<f2"))
+				print ("%f,%f,0x%x,%f,%f,%f,%f" % (v1[0], v1[1], v2, v3[0], v3[1], v3[2], v3[3]))
+			elif self.unk == 7:
+				v1 = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
+				v2 = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
+				v3 = vb.get("I")
+				print ("%f,%f,%f,%f,0x%x", v1[0], v1[1], v2[0], v2[1], v3)
+			
 		return vertices
 		
 class LodInfo(object):

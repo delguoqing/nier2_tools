@@ -41,8 +41,8 @@ for i, dup in vertices_dup.items():
     v = mesh.vertices[i]
 
     vdata = {}
-    vdata["position"] = [v.co[0], v.co[1], v.co[2]]
-    vdata["normal"] = [v.normal[0], v.normal[1], v.normal[2]]
+    vdata["position"] = [v.co[0], v.co[2], -v.co[1]]
+    vdata["normal"] = [v.normal[0], v.normal[2], -v.normal[1]]
     
     # can't restore index in the bone set, so just we bone id here~
     bone_ids = [0] * 4       # index in bone_set => index in whole file => bone id
