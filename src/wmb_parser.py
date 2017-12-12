@@ -368,7 +368,7 @@ class GeoBuffer(object):
 		self.vb_strides = self._params[4:8]
 		assert self.vb_strides[2] == 0 and self.vb_strides[3] == 0
 		self.vnum = self._params[8]
-		self.unk = self._params[9]
+		self.vfmt2 = self._params[9]
 		self.ib_offset = self._params[10]
 		self.inum = self._params[11]
 		self.vbufs = []
@@ -383,27 +383,25 @@ class GeoBuffer(object):
 			self.indices = wmb.get("%dH" % self.inum, force_tuple=True)
 		else:
 			self.indices = wmb.get("%dI" % self.inum, force_tuple=True)
+		#print (self)
+		VFMT2STRIDE = {
+			10: 0x10,
+			11: 0x14,
+			7: 0xc,
+			5: 0xc,
+			4: 0x8,
+			14: 0x10,
+			12: 0x14,
+		}
+		assert (self.vb_strides[1] == VFMT2STRIDE[self.vfmt2])		
 		self.vertices = self.parse_vb()
 		
 	def __str__(self):
 		return "vb_offs=0x%x/0x%x/%d,%d,vb_strides=0x%x/0x%x/%d/%d,vnum=%d,%d,ib_off=0x%x,inum=%d" % self._params
 	
-	def test(self):
-		vb0 = util.get_getter(self.vbufs[0], "<")
-		def f(v):
-			return (v * 2 - 255.0) / 255.0
-		
-		for i in xrange(self.vnum):
-			vb0.seek(i * self.vb_strides[0])
-			vb0.skip(0xc)	# position
-			normal = map(f, vb0.get("3B"))	# mostly normalized, with some custom normals ...
-			unk0 = vb0.get("B")
-			vb0.skip(0xc)	# uv, bone indices, bone weights
-			assert unk0 in (0x0, 0xff)
-
 	def parse_vb(self):
-		def f(v):
-			return (v * 2 - 255.0) / 255.0
+		def conv_tangent(v):
+			return v / 255.0 * 2.0 - 1.0
 		
 		vertices = []
 		vb = util.get_getter(self.vbufs[0], "<")
@@ -411,40 +409,46 @@ class GeoBuffer(object):
 		
 		assert stride == 0x1C
 		for i in xrange(self.vnum):
+			# first vertex buffer
 			x, y, z = vb.get("3f")
-			nx, ny, nz = map(f, vb.get("3B"))
-			unknown = vb.get("B")
+			tangent = map(conv_tangent, vb.get("4B"))	# The last element being the `sign`
+			for j in xrange(3):
+				tangent[j] *= tangent[3]
 			u, v = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
 			bone_indices = vb.get("4B")
 			bone_weights = vb.get("4B")
 			#assert sum(bone_weights) == 0xFF, "bone_weights sum=0x%x" % sum(bone_weights)
+			
+			# secondary vertex buffer
+			vb2 = util.get_getter(self.vbufs[1], "<")
+			if self.vfmt2 == 10:
+				# Offset	Sematics	Format
+				# 0x0		TEXCOORD1	DXGI_FORMAT_R16G16_FLOAT
+				# 0x8		NORMAL		DXGI_FORMAT_R16G16B16A16_FLOAT
+				vb2.skip(0x8)
+				nx, ny, nz, nw = numpy.frombuffer(vb2.get_raw(8), dtype=numpy.dtype("<f2"))
+			elif self.vfmt2 == 7:
+				# Offset	Sematics	Format
+				# 0x0		TEXCOORD1	DXGI_FORMAT_R16G16_FLOAT
+				# 0x4		NORMAL		DXGI_FORMAT_R16G16B16A16_FLOAT
+				vb2.skip(0x4)
+				nx, ny, nz, nw = numpy.frombuffer(vb2.get_raw(8), dtype=numpy.dtype("<f2"))
+			elif self.vfmt2 == 11:
+				# Offset	Sematics	Format
+				# 0x0		TEXCOORD1	DXGI_FORMAT_R16G16_FLOAT
+				# 0x8		NORMAL		DXGI_FORMAT_R16G16B16A16_FLOAT
+				# 0x10		TEXCOORD2	DXGI_FORMAT_R16G16_FLOAT
+				vb2.skip(0x8)
+				nx, ny, nz, nw = numpy.frombuffer(vb2.get_raw(8), dtype=numpy.dtype("<f2"))
+				vb2.skip(0x4)
+				
 			vertices.append({
-				"position": (x, y, z),
-				"normal": (nx, ny, nz),
-				"unknown": unknown,
-				"uv": (u, v),
-				"bone_indices": bone_indices,
+				"position": (x, y, z),			
+				"normal": (nx, ny, nz),			
+				"uv": (u, v),					
+				"bone_indices": bone_indices,	
 				"bone_weights": bone_weights,
 			})
-			
-		# second vertex buffer
-		vb = util.get_getter(self.vbufs[1], "<")
-		stride = self.vb_strides[1]
-		for i in xrange(self.vnum):
-			if self.unk == 10:
-				v1 = numpy.frombuffer(vb.get_raw(12), dtype=numpy.dtype("<f2"))
-				v2 = vb.get("I")
-				print ("%f,%f,%f,%f,0x%x" % (v1[0], v1[1], v1[2], v1[3], v2))
-			elif self.unk == 11:
-				v1 = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
-				v2 = vb.get("I")
-				v3 = numpy.frombuffer(vb.get_raw(12), dtype=numpy.dtype("<f2"))
-				print ("%f,%f,0x%x,%f,%f,%f,%f" % (v1[0], v1[1], v2, v3[0], v3[1], v3[2], v3[3]))
-			elif self.unk == 7:
-				v1 = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
-				v2 = numpy.frombuffer(vb.get_raw(4), dtype=numpy.dtype("<f2"))
-				v3 = vb.get("I")
-				print ("%f,%f,%f,%f,0x%x", v1[0], v1[1], v2[0], v2[1], v3)
 			
 		return vertices
 		
@@ -969,7 +973,7 @@ def export_gtb(wmb, lod=0):
 			msh["weights"] = []
 		for v in geo_buffer.vertices[min_index: max_index + 1]:
 			msh["position"].extend(v["position"])
-			msh["normal"].extend(v["normal"])
+			msh["normal"].extend(map(float, v["normal"]))
 			msh["uv0"].extend(map(float, v["uv"]))	# float16 is not JSON serializable
 			if has_bone:
 				msh["joints"].extend(v["bone_indices"])
