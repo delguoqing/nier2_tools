@@ -48,6 +48,8 @@ for i, dup in vertices_dup.items():
     bone_ids = [0] * 4       # index in bone_set => index in whole file => bone id
     bone_weights = [0] * 4  # should normalize to [0, 255]
     for j, group_weight in enumerate(v.groups):
+        if j >= 4:
+            break
         group_index = group_weight.group
         weight = group_weight.weight
         group = object.vertex_groups[group_index]

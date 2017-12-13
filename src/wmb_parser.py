@@ -267,7 +267,7 @@ class WMB(object):
 							index_in_boneset = _i
 							break
 				if index_in_boneset == -1:
-					v["bone_weights"] = 0
+					v["bone_weights"][i] = 0
 				else:
 					bone_indices[i] = index_in_boneset
 			result.append(struct.pack("4B", bone_indices[0], bone_indices[1], bone_indices[2],
