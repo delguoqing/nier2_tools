@@ -248,7 +248,7 @@ class WMB(object):
 			tangent = [0.2, 0.5, 0.842615]	# we don't have tangent value now, so we just leave it to some random value
 			tangent_sign = 1.0
 			tangent = map(lambda t: t * tangent_sign * 2.0 - 1.0, tangent)
-			result.append(struct.pack("4B", (tangent[0], tangent[1], tangent[2], tangent_sign * 2.0 - 1.0)))
+			result.append(struct.pack("4B", tangent[0], tangent[1], tangent[2], tangent_sign * 2.0 - 1.0))
 			uv = map(lambda u: numpy.float16(u).view('H'), v["uv"])
 			result.append(struct.pack("<2H", uv[0], uv[1]))
 			bone_indices = [0] * 4
@@ -333,13 +333,13 @@ class WMB(object):
 		rdata = self.raw_data[const.WMB_BLK_GEO]
 		self.raw_data[const.WMB_BLK_GEO] = rdata[:submesh_info.geo_idx * sz] + dump + rdata[submesh_info.geo_idx * sz + sz:]
 		# Modify submesh info
-		vnum = len(vertices)
+		vmax = new_vnum
 		inum = len(indices)
-		vstart = geo_buffer.vnum	# append to the end of the original buffer
+		vstart = 0	# append to the end of the original buffer, because we have shifted indices manually, we don't have to set vstart here
 		istart = geo_buffer.inum
 		prim_num = inum / 3
 		submesh_info_dump = struct.pack("<IiIIIII", submesh_info.geo_idx,
-										submesh_info.boneset_idx, vstart, istart, vnum, inum,
+										submesh_info.boneset_idx, vstart, istart, vmax, inum,
 										prim_num)
 		sz = len(submesh_info_dump)
 		rdata = self.raw_data[const.WMB_BLK_SUBMESH]
@@ -424,7 +424,7 @@ class GeoBuffer(object):
 		
 	def __str__(self):
 		return "vb_offs=0x%x/0x%x/%d,%d,vb_strides=0x%x/0x%x/%d/%d,vnum=%d,%d,ib_off=0x%x,inum=%d" % self._params
-	
+
 	def parse_vb(self):
 		def conv_tangent(v):
 			return v / 255.0 * 2.0 - 1.0
@@ -986,7 +986,7 @@ def export_gtb(wmb, lod=0):
 		msh["indices"] = map(lambda v: v - min_index, msh["indices"])
 		
 		vertex_num = max_index + 1 - min_index
-		#print "inum, vnum", index_num, vertex_num, min_index, max_index, len(msh["indices"])
+		print "inum, vnum", index_num, vertex_num, min_index, max_index, len(msh["indices"]), submesh_info.vnum
 		msh["vertex_num"] = vertex_num
 		msh["index_num"] = index_num
 		msh["position"] = []
