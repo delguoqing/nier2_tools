@@ -3,7 +3,7 @@ import bpy
 D = bpy.data
 
 object = bpy.context.active_object
-armt = D.objects["armat"]
+armt = object.modifiers[0].object
 bone_mapping = armt["bone_mapping"] # {bone_id => bone_name}
 rev_bone_mapping = dict(zip(bone_mapping.values(), bone_mapping.keys()))
 
