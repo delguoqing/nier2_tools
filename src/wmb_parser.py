@@ -241,12 +241,14 @@ class WMB(object):
 			raise Exception("Too many vertex ..., this is not supported!")
 		if geo_buffer.vb_strides[0] != 0x1C:
 			raise Exception("vertex buffer format not supported. stride=0x%x" % geo_buffer.vb_strides[0])
-		
-		def ser_vertex(v):
+		# serialize vertex for primary vertex buffer
+		def ser_vertex1(v):
 			result = []
 			result.append(struct.pack("<3f", v["position"][0], v["position"][1], v["position"][2]))
-			normal = map(lambda nx: (nx * 255.0 + 255.0) / 2.0, v["normal"])
-			result.append(struct.pack("4B", normal[0], normal[1], normal[2], 0))
+			tangent = [0.2, 0.5, 0.842615]	# we don't have tangent value now, so we just leave it to some random value
+			tangent_sign = 1.0
+			tangent = map(lambda t: t * tangent_sign * 2.0 - 1.0, tangent)
+			result.append(struct.pack("4B", (tangent[0], tangent[1], tangent[2], tangent_sign * 2.0 - 1.0)))
 			uv = map(lambda u: numpy.float16(u).view('H'), v["uv"])
 			result.append(struct.pack("<2H", uv[0], uv[1]))
 			bone_indices = [0] * 4
@@ -273,13 +275,37 @@ class WMB(object):
 			result.append(struct.pack("4B", v["bone_weights"][0], v["bone_weights"][1], v["bone_weights"][2],
 									  v["bone_weights"][3]))
 			return "".join(result)
+		# serialize vertex buffer for secondary vertex buffer
+		def ser_vertex2(v):
+			vfmt2 = geo_buffer.vfmt2
+			result = []
+			if vfmt2 == 10:
+				result.append("\x00" * 8)
+				normal = map(lambda u: numpy.float16(u).view('H'), v["normal"])
+				result.append(struct.pack("<3H", normal[0], normal[1], normal[2]))
+				result.append("\x00" * 2)
+			elif vfmt2 == 7:
+				result.append("\x00" * 4)
+				normal = map(lambda u: numpy.float16(u).view('H'), v["normal"])
+				result.append(struct.pack("<3H", normal[0], normal[1], normal[2]))
+				result.append("\x00" * 2)
+			elif vfmt2 == 11:
+				result.append("\x00" * 8)
+				normal = map(lambda u: numpy.float16(u).view('H'), v["normal"])
+				result.append(struct.pack("<3H", normal[0], normal[1], normal[2]))
+				result.append("\x00" * 2)
+				result.append("\x00" * 4)
+			else:
+				assert False, "unsupported vertex format for secondary vertex buffer!"
+			return "".join(result)
 
 		# create vertex buffer and index buffer
 		old_vbufs = geo_buffer.vbufs
 		old_indices = geo_buffer.indices
 		# fixing vertex buffer
-		new_vbufs = [old_vbufs[0] + "".join(map(ser_vertex, vertices))]	# append 1st vbuf
-		for i in xrange(1, len(old_vbufs)):				# padding rest vbuf, because we don't know the format yet
+		new_vbufs = [old_vbufs[0] + "".join(map(ser_vertex1, vertices)),	# append 1st vbuf
+					 old_vbufs[1] + "".join(map(ser_vertex2, vertices)),]	# append 2nd vbuf
+		for i in xrange(2, len(old_vbufs)):				# padding rest vbuf, because we don't know the format yet
 			new_vbufs.append(old_vbufs[i] + "\x00" * (vnum_added * geo_buffer.vb_strides[i]))
 		# fixing index buffer
 		new_indices = old_indices + tuple(map(lambda v: v + old_vnum, indices))
@@ -299,10 +325,10 @@ class WMB(object):
 			curr_offset += len(new_vbufs[i])
 		vb_strides = geo_buffer.vb_strides		# use old stride
 		vnum = new_vnum
-		unk = geo_buffer.unk
+		vfmt2 = geo_buffer.vfmt2
 		ib_offset = curr_offset
 		inum = geo_buffer.inum + len(indices)
-		dump = create_geo_buffer_dump(vb_offsets, vb_strides, vnum, unk, ib_offset, inum)
+		dump = create_geo_buffer_dump(vb_offsets, vb_strides, vnum, vfmt2, ib_offset, inum)
 		sz = len(dump)
 		rdata = self.raw_data[const.WMB_BLK_GEO]
 		self.raw_data[const.WMB_BLK_GEO] = rdata[:submesh_info.geo_idx * sz] + dump + rdata[submesh_info.geo_idx * sz + sz:]
@@ -319,9 +345,9 @@ class WMB(object):
 		rdata = self.raw_data[const.WMB_BLK_SUBMESH]
 		self.raw_data[const.WMB_BLK_SUBMESH] = rdata[:index * sz] + submesh_info_dump + rdata[index * sz + sz:]
 
-def create_geo_buffer_dump(vb_offsets, vb_strides, vnum, unk, ib_offset, inum):
+def create_geo_buffer_dump(vb_offsets, vb_strides, vnum, vfmt2, ib_offset, inum):
 	dump = struct.pack("<IIIIIIIIIIII", vb_offsets[0], vb_offsets[1], vb_offsets[2], vb_offsets[3], vb_strides[0],
-					   vb_strides[1], vb_strides[2], vb_strides[3], vnum, unk, ib_offset, inum)
+					   vb_strides[1], vb_strides[2], vb_strides[3], vnum, vfmt2, ib_offset, inum)
 	return dump
 		
 class SubMeshInfo(object):
