@@ -247,8 +247,8 @@ class WMB(object):
 			result.append(struct.pack("<3f", v["position"][0], v["position"][1], v["position"][2]))
 			tangent = [0.2, 0.5, 0.842615]	# we don't have tangent value now, so we just leave it to some random value
 			tangent_sign = 1.0
-			tangent = map(lambda t: t * tangent_sign * 2.0 - 1.0, tangent)
-			result.append(struct.pack("4B", tangent[0], tangent[1], tangent[2], tangent_sign * 2.0 - 1.0))
+			tangent = map(lambda t: int(255 * (t * tangent_sign * 0.5 + 0.5)), tangent)
+			result.append(struct.pack("4B", tangent[0], tangent[1], tangent[2], int((tangent_sign * 0.5 + 0.5) * 255)))
 			uv = map(lambda u: numpy.float16(u).view('H'), v["uv"])
 			result.append(struct.pack("<2H", uv[0], uv[1]))
 			bone_indices = [0] * 4
