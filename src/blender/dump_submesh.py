@@ -36,6 +36,25 @@ for poly in mesh.polygons:
         resolved_index = resolve_index(index, uv)
         indices.append(resolved_index)
 
+def most_important_bone_weights(v, n):
+    result = []
+    for group_weight in v.groups:
+        group_index = group_weight.group
+        weight = group_weight.weight
+        result.append((group_index, weight))
+    result.sort(key=lambda v: v[1], reverse=True)
+    topn = result[:n]
+    total_w = 0.0
+    for group_index, weight in topn:
+        total_w += weight
+    if total_w > 0.0:
+        topn_norm = []
+        for group_index, weight in topn:
+            topn_norm.append((group_index, weight / total_w))
+        return topn_norm
+    else:
+        return topn
+
 vertices = [None] * base_index
 for i, dup in vertices_dup.items():
     v = mesh.vertices[i]
@@ -47,11 +66,9 @@ for i, dup in vertices_dup.items():
     # can't restore index in the bone set, so just we bone id here~
     bone_ids = [0] * 4       # index in bone_set => index in whole file => bone id
     bone_weights = [0] * 4  # should normalize to [0, 255]
-    for j, group_weight in enumerate(v.groups):
-        if j >= 4:
-            break
-        group_index = group_weight.group
-        weight = group_weight.weight
+    
+    top4 = most_important_bone_weights(v, 4)
+    for j, (group_index, weight) in enumerate(top4):
         group = object.vertex_groups[group_index]
         bone_id_str = rev_bone_mapping[group.name]
         bone_id = int(bone_id_str)
