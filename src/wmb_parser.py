@@ -100,6 +100,7 @@ class WMB(object):
 		self.bonesets = bonesets
 		self.bonemap = bonemap	# {index => id}
 		self.materials = mats
+		self.is_boneset_modified = False
 		
 		# save raw data for each block, so that we I can focus on modding
 		# interesting blocks while leaving other blocks intact without needing
@@ -193,6 +194,23 @@ class WMB(object):
 			
 		# append additional data
 		fp_out.write(self.append_data)
+		
+		# write new boneset
+		boneset_offset = fp_out.tell()
+		boneset_count = len(self.bonesets)
+		#	write the data
+		boneset_offsettable_size = boneset_count * 8
+		curr_boneset_offset = boneset_offset + boneset_offsettable_size
+		for i, boneset in enumerate(self.bonesets):
+			fp_out.write(struct.pack("<II", curr_boneset_offset, len(boneset)))
+			curr_boneset_offset += len(boneset) * 2
+		for i, boneset in enumerate(self.bonesets):
+			for index_in_boneset in boneset:
+				fp_out.write(struct.pack("<H", index_in_boneset))
+		#	write the entry
+		fp_out.seek(ENTRY_OFFSET + i * 8, os.SEEK_SET)
+		fp_out.write(struct.pack("<II", boneset_offset, boneset_count))
+		
 
 	def get_default_block_data_writer(self, i):
 		def write(fp):
@@ -220,7 +238,21 @@ class WMB(object):
 			if bone_id == _id:
 				return _i
 		return -1
-			
+		
+	def create_boneset_from_vertices(self, vertices):
+		boneset = set()
+		for vertex in vertices:
+			for i in xrange(4):
+				if vertex["bone_weights"][i] == 0:
+					continue
+				bone_index = self.get_bone_index_by_bone_id(vertex["bone_ids"][i])
+				print ("adding", vertex["bone_ids"][i], bone_index)
+				boneset.add(bone_index)
+		return tuple(boneset)
+	
+	def add_boneset(self, boneset):
+		self.bonesets.append(boneset)
+		
 	def replace_submesh(self, index, vertices, indices):
 		"""
 		Each LOD level contains several submesh. This is the smallest piece we can replace.
@@ -241,6 +273,13 @@ class WMB(object):
 			raise Exception("Too many vertex ..., this is not supported!")
 		if geo_buffer.vb_strides[0] != 0x1C:
 			raise Exception("vertex buffer format not supported. stride=0x%x" % geo_buffer.vb_strides[0])
+		# create new boneset
+		boneset = self.create_boneset_from_vertices(vertices)
+		print ("boneset", boneset)
+		self.add_boneset(boneset)
+		new_boneset_idx = len(self.bonesets) - 1
+		submesh_info.boneset_idx = new_boneset_idx
+		self.is_boneset_modified = True
 		# serialize vertex for primary vertex buffer
 		def ser_vertex1(v):
 			result = []
@@ -255,21 +294,15 @@ class WMB(object):
 			for i in xrange(4):
 				if v["bone_weights"][i] == 0:
 					break
-				bone_id = v["bone_ids"][i]
-				
-				if submesh_info.boneset_idx == -1:
-					index_in_boneset = -1
-				else:
-					bone_index = self.get_bone_index_by_bone_id(bone_id)
-					index_in_boneset = -1
-					for _i, _bone_index in enumerate(self.bonesets[submesh_info.boneset_idx]):
-						if bone_index == _bone_index:
-							index_in_boneset = _i
-							break
-				if index_in_boneset == -1:
-					v["bone_weights"][i] = 0
-				else:
-					bone_indices[i] = index_in_boneset
+				bone_id = v["bone_ids"][i]				
+				bone_index = self.get_bone_index_by_bone_id(bone_id)
+				index_in_boneset = -1
+				for _i, _bone_index in enumerate(self.bonesets[submesh_info.boneset_idx]):
+					if bone_index == _bone_index:
+						index_in_boneset = _i
+						break
+				bone_indices[i] = index_in_boneset
+				assert index_in_boneset != -1, "after creating a new boneset, all bones should have an index in that boneset"				
 			result.append(struct.pack("4B", bone_indices[0], bone_indices[1], bone_indices[2],
 									  bone_indices[3]))
 			result.append(struct.pack("4B", v["bone_weights"][0], v["bone_weights"][1], v["bone_weights"][2],
