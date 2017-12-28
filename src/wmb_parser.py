@@ -80,6 +80,7 @@ class WMB(object):
 		lod_infos = read_lod(wmb, subblocks[4][0], subblocks[4][1])
 		
 		bonemap = read_bonemap(wmb, subblocks[6][0], subblocks[6][1])
+		print_bonemap(bonemap)
 		
 		bonesets = read_bonesets(wmb, subblocks[7][0], subblocks[7][1])
 		#splitter("Mat?")
@@ -692,10 +693,7 @@ def read_rev(wmb, offset, count):
 			print "%r: %d" % (value, val_map[value])
 
 class BoneInfo(object):
-	
-	def __init__(self, bone_index):
-		self.bone_index = bone_index
-		
+
 	def make_scale_mat(self, sx, sy, sz):
 		scale_mat = numpy.matrix([
 			[sx, 0, 0, 0],
@@ -750,7 +748,7 @@ class BoneInfo(object):
 		self.bone_id = wmb.get("H")
 		if self.bone_id & 0xFF == 64:
 			print "A2 offset = ", hex(wmb.offset)
-		self.parent_idx = wmb.get("h")
+		self.parent_idx = wmb.get("h")	# index of the parent BoneInfo
 		self.local_pos = wmb.get("3f")
 		self.local_rot = wmb.get("3f")
 		self.local_scale = wmb.get("3f")
@@ -775,21 +773,7 @@ class BoneInfo(object):
 		self.offset_matrix = self.world_matrix.getI()
 		
 	def print_out(self):
-		# global bone id?, parent bone index
-		print "-" * 20
-		print "Bone index %d" % self.bone_index
-		print "Bone id=%d, %d, %d, Parent index=%d" % (self.bone_id & 0xFF, self.bone_id, self.bone_id >> 8, self.parent_idx)
-		# position, rotation(quaternion compressed?), scale
-		#print "Local Pos  ", self.local_pos
-		#print "Local Rot  ", self.local_rot
-		#print "Local Scale", self.local_scale
-		#print
-		# matrix
-		#print "World Pos  ", self.world_pos
-		#print "World Rot  ", self.world_rot
-		#print "World Scale", self.world_scale
-		#print "World Pos(TPose) ", self.world_position_tpose
-		#print "World PosDiff", self.world_position_tpose[0] - self.world_pos[0], self.world_position_tpose[1] - self.world_pos[1], self.world_position_tpose[2] - self.world_pos[2]
+		print "Bone id=%d, Unknown=%d, Parent BoneInfo index=%d" % (self.bone_id & 0xFF, self.bone_id >> 8, self.parent_idx)
 	
 	def print_cmp_parent(self, pinfo):
 		print "compare ---"
@@ -813,16 +797,18 @@ def read_bone(wmb, offset, count):
 	wmb.seek(bone_offset)
 	ret = []
 	for bone_index in xrange(bone_count):
-		bone_info = BoneInfo(bone_index)
+		bone_info = BoneInfo()
 		bone_info.read(wmb)
 		ret.append(bone_info)
 		
 	# print bone info with referrence to its parent
-	for bone_index in xrange(bone_count):
-		bone_info = ret[bone_index]
+	for i in xrange(bone_count):
+		bone_info = ret[i]
 		#print "=" * 20
 	#	if bone_info.parent_idx != -1:
 	#		ret[bone_info.parent_idx].print_out()
+		print "-" * 20
+		print ("(%d)" % i),
 		bone_info.print_out()
 	#	if bone_info.parent_idx != -1:
 	#		bone_info.print_cmp_parent(ret[bone_info.parent_idx])
@@ -912,7 +898,12 @@ def read_bonemap(wmb, offset, num):
 		return []
 	wmb.seek(offset)
 	return wmb.get("%dI" % num, force_tuple=True)
-	
+
+def print_bonemap(bonemap):
+	print ("bonemap:")
+	for i, bone_id in enumerate(bonemap):
+		print ("%d: %d" % (i, bone_id))
+
 def test(path):
 	for fpath in util.iter_path(path):
 		if fpath.endswith(".wmb"):
@@ -1067,9 +1058,8 @@ def export_gtb(wmb, lod=0):
 		skel["parent"] = [-1] * bone_num
 		skel["matrix"] = []
 		skel["bone_id"] = []
-		for bone_info in wmb.bone_infos:
-			bone_index = bone_info.bone_index
-			skel["parent"][bone_index] = bone_info.parent_idx
+		for i, bone_info in enumerate(wmb.bone_infos):
+			skel["parent"][i] = bone_info.parent_idx
 			skel["matrix"].extend(bone_info.local_matrix.getA1())
 			skel["bone_id"].append(bone_info.bone_id)
 	
