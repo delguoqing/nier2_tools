@@ -64,7 +64,7 @@ class WMB(object):
 	
 	def read_rest(self, wmb):
 		subblocks = self.subblocks
-		bone_infos = read_bone(wmb, subblocks[0][0], subblocks[0][1])
+		bone_infos = read_bone(wmb, subblocks[0][0], subblocks[0][1])	# hierachy info
 		read_rev(wmb, subblocks[1][0], subblocks[1][1])
 		#splitter("GeoBuffer")
 		geo_buffers = read_geo(wmb, subblocks[2][0], subblocks[2][1], (self.flags & 0x8) and 4 or 2)
@@ -79,10 +79,10 @@ class WMB(object):
 		#splitter("Lod")
 		lod_infos = read_lod(wmb, subblocks[4][0], subblocks[4][1])
 		
-		bonemap = read_bonemap(wmb, subblocks[6][0], subblocks[6][1])
+		bonemap = read_bonemap(wmb, subblocks[6][0], subblocks[6][1])	# bonemap {index => bone_id}	all used bone ids
 		print_bonemap(bonemap)
 		
-		bonesets = read_bonesets(wmb, subblocks[7][0], subblocks[7][1])
+		bonesets = read_bonesets(wmb, subblocks[7][0], subblocks[7][1])	#
 		#splitter("Mat?")
 		mats = read_mat(wmb, subblocks[8][0], subblocks[8][1])
 		
@@ -746,8 +746,6 @@ class BoneInfo(object):
 		
 	def read(self, wmb):
 		self.bone_id = wmb.get("H")
-		if self.bone_id & 0xFF == 64:
-			print "A2 offset = ", hex(wmb.offset)
 		self.parent_idx = wmb.get("h")	# index of the parent BoneInfo
 		self.local_pos = wmb.get("3f")
 		self.local_rot = wmb.get("3f")
@@ -773,7 +771,8 @@ class BoneInfo(object):
 		self.offset_matrix = self.world_matrix.getI()
 		
 	def print_out(self):
-		print "Bone id=%d, Unknown=%d, Parent BoneInfo index=%d" % (self.bone_id & 0xFF, self.bone_id >> 8, self.parent_idx)
+		print "Bone id=%d, Low=%d, High=%d, Parent BoneInfo index=%d" % (
+			self.bone_id, (self.bone_id & 0xFF), (self.bone_id >> 8), self.parent_idx)
 	
 	def print_cmp_parent(self, pinfo):
 		print "compare ---"
@@ -1054,15 +1053,17 @@ def export_gtb(wmb, lod=0):
 	bone_num = len(wmb.bone_infos)
 	if bone_num > 0:
 		skel = gtb["skeleton"] = {}
-		skel["name"] = map(lambda v: "Bone%d" % v, range(bone_num))
+		skel["name"] = []
 		skel["parent"] = [-1] * bone_num
 		skel["matrix"] = []
 		skel["bone_id"] = []
 		for i, bone_info in enumerate(wmb.bone_infos):
+			bone_id = bone_info.bone_id
 			skel["parent"][i] = bone_info.parent_idx
 			skel["matrix"].extend(bone_info.local_matrix.getA1())
-			skel["bone_id"].append(bone_info.bone_id)
-	
+			skel["bone_id"].append(bone_id)
+			skel["name"].append("Bone%d" % bone_id)
+
 	return gtb
 	
 def dump_wmb(wmb, outpath="a.gtb"):
