@@ -102,6 +102,7 @@ class WMB(object):
 		self.bonemap = bonemap	# {index => id}
 		self.materials = mats
 		self.is_boneset_modified = False
+		self.is_bonemap_modified = False
 		
 		# save raw data for each block, so that we I can focus on modding
 		# interesting blocks while leaving other blocks intact without needing
@@ -195,23 +196,35 @@ class WMB(object):
 			
 		# append additional data
 		fp_out.write(self.append_data)
-		
-		# write new boneset
-		boneset_offset = fp_out.tell()
-		boneset_count = len(self.bonesets)
-		#	write the data
-		boneset_offsettable_size = boneset_count * 8
-		curr_boneset_offset = boneset_offset + boneset_offsettable_size
-		for i, boneset in enumerate(self.bonesets):
-			fp_out.write(struct.pack("<II", curr_boneset_offset, len(boneset)))
-			curr_boneset_offset += len(boneset) * 2
-		for i, boneset in enumerate(self.bonesets):
-			for index_in_boneset in boneset:
-				fp_out.write(struct.pack("<H", index_in_boneset))
-		#	write the entry
-		fp_out.seek(ENTRY_OFFSET + i * 8, os.SEEK_SET)
-		fp_out.write(struct.pack("<II", boneset_offset, boneset_count))
-		
+
+		if self.is_boneset_modified:
+			fp_out.seek(0, os.SEEK_END)
+			# write new boneset
+			boneset_offset = fp_out.tell()
+			boneset_count = len(self.bonesets)
+			#	write the data
+			boneset_offsettable_size = boneset_count * 8
+			curr_boneset_offset = boneset_offset + boneset_offsettable_size
+			for i, boneset in enumerate(self.bonesets):
+				fp_out.write(struct.pack("<II", curr_boneset_offset, len(boneset)))
+				curr_boneset_offset += len(boneset) * 2
+			for i, boneset in enumerate(self.bonesets):
+				for index_in_boneset in boneset:
+					print ("index_in_boneset", index_in_boneset)
+					fp_out.write(struct.pack("<H", index_in_boneset))
+			#	write the entry
+			fp_out.seek(ENTRY_OFFSET + const.WMB_BLK_BONESET * 8, os.SEEK_SET)
+			fp_out.write(struct.pack("<II", boneset_offset, boneset_count))
+
+		if self.is_bonemap_modified:
+			fp_out.seek(0, os.SEEK_END)
+			bonemap_offset = fp_out.tell()
+			bonemap_count = len(self.bonemap)
+			for boneid in self.bonemap:
+				fp_out.write(struct.pack("<I", boneid))
+			# write the entry
+			fp_out.seek(ENTRY_OFFSET + const.WMB_BLK_BONEMAP * 8, os.SEEK_SET)
+			fp_out.write(struct.pack("<II", bonemap_offset, bonemap_count))
 
 	def get_default_block_data_writer(self, i):
 		def write(fp):
@@ -240,6 +253,22 @@ class WMB(object):
 				return _i
 		return -1
 
+	# original bonemap does not contain every bone
+	# only those bone used for skinning is included in bonemap
+	# but for modding, we need a full bonemap
+	def create_full_bonemap(self):
+		if self.is_bonemap_modified:
+			return;
+		old_bonemap_bones = set(self.bonemap)
+		new_bonemap = list(self.bonemap)
+		for boneinfo in self.bone_infos:
+			if boneinfo.bone_id in old_bonemap_bones:
+				continue
+			else:
+				new_bonemap.append(boneinfo.bone_id)
+		self.bonemap = new_bonemap
+		self.bonemap_modified = True
+
 	# the maximum bone number used for gpu skinning is 128
 	def create_boneset_from_vertices(self, vertices):
 		boneset = set()
@@ -248,6 +277,7 @@ class WMB(object):
 				if vertex["bone_weights"][i] == 0:
 					continue
 				bone_index = self.get_bone_index_by_bone_id(vertex["bone_ids"][i])
+				assert bone_index != -1, ("can't find bone_id %d" % (vertex["bone_ids"][i]))
 				boneset.add(bone_index)
 		if len(boneset) > 128:
 			raise Exception("Bone count per submesh shouldn't exceed 128!")
@@ -266,6 +296,8 @@ class WMB(object):
 		2.modify the geometry block to reference the new vertex buffer and index buffer.
 		3.modify the submesh info
 		"""
+		self.create_full_bonemap()
+
 		submesh_info = self.submesh_infos[index]
 		geo_buffer = self.geo_buffers[submesh_info.geo_idx]
 		isize = self.get_vertex_index_size()	# how many bytes to represent a vertex index
