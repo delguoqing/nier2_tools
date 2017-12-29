@@ -239,7 +239,8 @@ class WMB(object):
 			if bone_id == _id:
 				return _i
 		return -1
-		
+
+	# the maximum bone number used for gpu skinning is 128
 	def create_boneset_from_vertices(self, vertices):
 		boneset = set()
 		for vertex in vertices:
@@ -247,8 +248,9 @@ class WMB(object):
 				if vertex["bone_weights"][i] == 0:
 					continue
 				bone_index = self.get_bone_index_by_bone_id(vertex["bone_ids"][i])
-				print ("adding", vertex["bone_ids"][i], bone_index)
 				boneset.add(bone_index)
+		if len(boneset) > 128:
+			raise Exception("Bone count per submesh shouldn't exceed 128!")
 		return tuple(boneset)
 	
 	def add_boneset(self, boneset):
