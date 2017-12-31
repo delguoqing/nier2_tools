@@ -61,3 +61,10 @@ output/
 src/em0000.wmb
 src/report.txt
 *.wmb
+src/APIMonitor.txt
+*.gtb
+src/Skirt10.001.json
+src/Skirt_00124.001.json
+src/Skirt10.Mod.json
+src/Skirt10.002.json
+src/Skirt10.json
