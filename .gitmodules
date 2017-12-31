@@ -1,0 +1,3 @@
+[submodule "src/fmt_def"]
+	path = src/fmt_def
+	url = https://github.com/delguoqing/fmt_def
