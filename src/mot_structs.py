@@ -17,7 +17,8 @@ class Track(object):
 			self.offset = mot.get("I")	# whence=os.SEEK_CUR
 			self.const = 0.0
 			self.is_const = False
-	
+
+	# just as Bayonetta2, offset is relative
 	def adjust_offset(self, offset):
 		if self.offset > 0:
 			self.offset += offset
@@ -26,22 +27,44 @@ class Track(object):
 		if self.offset <= 0:
 			return
 		mot.seek(self.offset)
-		if self.comtype == 7:
-			mot.seek(self.offset)
-			print mot.get("3f")
+		if self.comtype == 6:
+			# values as [base1, extent1],[base2, extent2],[base3, extent3]
+			values = numpy.frombuffer(mot.get_raw(0xc), dtype=numpy.dtype("<f2"))
+			print ("compType=6, values=", map(float, values))
+			keyframe_data = []
 			for i in xrange(self.keycount):
-				d = mot.get("4B")
-				if i == 0:
-					assert d[0] == 0, ",".join(map(str, d))
-				print "key%d" % i, d
-		elif self.comtype == 6:
-			mot.seek(self.offset)
-			print mot.get("3f")
-			for i in xrange(self.keycount):
-				d = mot.get("4B")
-				if i == 0:
-					assert d[0] == 0, ",".join(map(str, d))
-				print "key%d" % i, d
+				params = mot.get("4B");
+				print ("frame=%d, %d, %d, %d" % tuple(params))
+				frameIndex = params[0]
+				coeffs = [values[0] + params[1] * values[1],
+						  values[2] + params[2] * values[3],
+						  values[3] + params[3] * values]
+				keyframe_data.append((frameIndex, coeffs))
+		elif self.comtype == 7:
+			values = numpy.frombuffer(mot.get_raw(0xc), dtype=numpy.dtype("<f2"))
+			print ("compType=7, values=", map(float, values))
+			pass
+		else:
+			assert False, ("unknown compress type %d" % self.comtype)
+		# if self.comtype == 7:
+		# 	mot.seek(self.offset)
+		# 	print mot.get("3f")
+		# 	for i in xrange(self.keycount):
+		# 		d = mot.get("4B")
+		# 		if i == 0:
+		# 			assert d[0] == 0, ",".join(map(str, d))
+		# 		print "key%d" % i, d
+		# elif self.comtype == 6:
+		# 	mot.seek(self.offset)
+		# 	print mot.get("3f")
+		# 	for i in xrange(self.keycount):
+		# 		d = mot.get("4B")
+		# 		if i == 0:
+		# 			assert d[0] == 0, ",".join(map(str, d))
+		# 		print "key%d" % i, d
+
+	def eval(self, frameIndex):
+		pass
 	
 	def __str__(self):
 		ret = "Bone:%d, type=%d, compress=%d, keynum=%d, " % (
