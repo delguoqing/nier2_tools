@@ -416,3 +416,50 @@ def euler_to_matrix(rot_x, rot_y, rot_z):
 		[-sh * ca, sh * sa * cb + ch * sb, -sh * sa * sb + ch * cb, 0],
 		[0, 0, 0, 1],
 	])
+
+#thanks Phernost (stackoverflow)
+class FloatDecompressor(object):
+	significandFBits = 23
+	exponentFBits = 8
+	biasF = 127
+	exponentF    = 0x7F800000
+	significandF = 0x007fffff
+	signF        = 0x80000000
+	signH        = 0x8000
+
+	def __init__(self, eHBits, sHBits, bH):
+		self.exponentHBits = eHBits
+		self.significandHBits = sHBits
+		self.biasH = bH
+
+		self.exponentH = ((1 << eHBits) - 1) << sHBits
+		self.significandH = (1 << sHBits) - 1
+
+		self.shiftSign = self.significandFBits + self.exponentFBits - self.significandHBits - self.exponentHBits
+		self.shiftBits = self.significandFBits - self.significandHBits;
+
+	def decompress(self, value):
+		ui = value
+		sign = ui & self.signH
+		ui ^= sign
+
+		sign <<= self.shiftSign
+		exponent = ui & self.exponentH
+		significand = ui ^ exponent
+		significand <<= self.shiftBits
+
+		si = sign | significand
+		magic = 1.0
+		if exponent == self.exponentH:
+			si |= self.exponentF
+		elif exponent != 0:
+			exponent >>= self.significandHBits
+			exponent += self.biasF - self.biasH
+			exponent <<= self.significandFBits
+			si |= exponent
+		elif significand != 0:
+			magic = (2 * self.biasF - self.biasH) << self.significandFBits
+			magic = struct.unpack("f", struct.pack("I", magic))[0]
+		f = struct.unpack("f", struct.pack("I", si))[0]
+		f *= magic
+		return f
