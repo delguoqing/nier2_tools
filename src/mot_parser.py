@@ -65,7 +65,7 @@ def read_track(mot, offset, count):
 	for trk_idx in xrange(count):
 		track = tracks[trk_idx]
 		if track.offset:
-			print "-----------------Track %d @ 0x%x:" % (trk_idx, track.offset)
+			print "-----------------Track %d @ 0x%x: compType=%d" % (trk_idx, track.offset, track.comtype)
 			track.parse_keyframes(mot)
 	return tracks
 

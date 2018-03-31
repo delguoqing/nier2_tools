@@ -5,6 +5,24 @@ import util
 class MOT(object):
 	pass
 
+class HermitKeyframe(object):
+	
+	def __init__(self, frameIndex, coeffs):
+		self.frameIndex = frameIndex
+		self.coeffs = coeffs
+		
+	def __str__(self):
+		return "frame=%d, %g, %g, %g" % (self.frameIndex, self.coeffs[0], self.coeffs[1],
+										 self.coeffs[2])
+		
+class HermitSpline(object):
+	
+	def __init__(self, keyframes):
+		self.keyframes = keyframes
+		
+	def eval(self, frameIndex):
+		pass
+	
 class Track(object):
 	def read(self, mot):
 		self.bone_id = mot.get("h")
@@ -19,6 +37,8 @@ class Track(object):
 			self.offset = mot.get("I")	# whence=os.SEEK_CUR
 			self.const = 0.0
 			self.is_const = False
+	
+		self.spline = None		
 
 	# just as Bayonetta2, offset is relative
 	def adjust_offset(self, offset):
@@ -31,7 +51,23 @@ class Track(object):
 		C = util.FloatDecompressor(6, 9, 47)
 
 		mot.seek(self.offset)
-		if self.comtype == 6:
+		if self.comtype == 5:
+			values = list(mot.get("6f"))
+			keyframe_data = []
+			
+			for i in xrange(self.keycount):
+				params = mot.get("4H")
+				frameIndex = params[0]
+				coeffs = [values[0] + params[1] * values[1],
+						  values[2] + params[2] * values[3],
+						  values[4] + params[3] * values[5]]
+				keyframe = HermitKeyframe(frameIndex, coeffs)
+				keyframe_data.append(keyframe)
+				print str(keyframe)
+			
+			self.spline = HermitSpline(keyframe_data)
+			
+		elif self.comtype == 6:
 			# values as [base1, extent1],[base2, extent2],[base3, extent3]
 			raw = mot.get_raw(0xc)
 			print "raw = ", map(hex, struct.unpack("HHHHHH", raw))
@@ -49,16 +85,42 @@ class Track(object):
 				params = mot.get("4B");
 
 				frameIndex = params[0]
-				coeffs = [values[0] + params[1] / 255.0 * values[1],
-						  values[2] + params[2] / 255.0 * values[3],
-						  values[4] + params[3] / 255.0 * values[5]]
-				keyframe_data.append((frameIndex, coeffs))
-				print ("frame=%d, %f, %f, %f" % (frameIndex, coeffs[0], coeffs[1], coeffs[2]))
+				coeffs = [values[0] + params[1] * values[1],
+						  values[2] + params[2] * values[3],
+						  values[4] + params[3] * values[5]]
+				keyframe = HermitKeyframe(frameIndex, coeffs)
+				keyframe_data.append(keyframe)
+				print str(keyframe)
 
+			self.spline = HermitSpline(keyframe_data)
 		elif self.comtype == 7:
-			values = numpy.frombuffer(mot.get_raw(0xc), dtype=numpy.dtype("<f2"))
-			print ("compType=7, values=", map(float, values))
-			pass
+			# values as [base1, extent1],[base2, extent2],[base3, extent3]
+			raw = mot.get_raw(0xc)
+			print "raw = ", map(hex, struct.unpack("HHHHHH", raw))
+
+			values = []
+			for v in struct.unpack("6H", raw):
+				values.append(C.decompress(v))
+			print ("values =", values)
+			# print ("floatDecompressor", values)
+            #
+            #
+			# values = numpy.frombuffer(raw, dtype=numpy.dtype("<f2"))
+			keyframe_data = []
+			frameIndex = 0
+			for i in xrange(self.keycount):
+				params = mot.get("4B");
+
+				frameCount = params[0]
+				frameIndex += frameCount
+				coeffs = [values[0] + params[1] * values[1],
+						  values[2] + params[2] * values[3],
+						  values[4] + params[3] * values[5]]
+				keyframe = HermitKeyframe(frameIndex, coeffs)
+				keyframe_data.append(keyframe)
+				print str(keyframe)
+				
+			self.spline = HermitSpline(keyframe_data)
 		else:
 			assert False, ("unknown compress type %d" % self.comtype)
 		# if self.comtype == 7:
@@ -79,7 +141,9 @@ class Track(object):
 		# 		print "key%d" % i, d
 
 	def eval(self, frameIndex):
-		pass
+		if self.is_const:
+			return self.const
+		return self.spline.eval(frameIndex)
 	
 	def __str__(self):
 		ret = "Bone:%d, type=%d, compress=%d, keynum=%d, " % (
