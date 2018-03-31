@@ -1,4 +1,6 @@
 import numpy
+import struct
+import util
 
 class MOT(object):
 	pass
@@ -26,20 +28,33 @@ class Track(object):
 	def parse_keyframes(self, mot):
 		if self.offset <= 0:
 			return
+		C = util.FloatDecompressor(6, 9, 47)
+
 		mot.seek(self.offset)
 		if self.comtype == 6:
 			# values as [base1, extent1],[base2, extent2],[base3, extent3]
-			values = numpy.frombuffer(mot.get_raw(0xc), dtype=numpy.dtype("<f2"))
-			print ("compType=6, values=", map(float, values))
+			raw = mot.get_raw(0xc)
+			print "raw = ", map(hex, struct.unpack("HHHHHH", raw))
+
+			values = []
+			for v in struct.unpack("6H", raw):
+				values.append(C.decompress(v))
+			print ("values =", values)
+			# print ("floatDecompressor", values)
+            #
+            #
+			# values = numpy.frombuffer(raw, dtype=numpy.dtype("<f2"))
 			keyframe_data = []
 			for i in xrange(self.keycount):
 				params = mot.get("4B");
-				print ("frame=%d, %d, %d, %d" % tuple(params))
+
 				frameIndex = params[0]
-				coeffs = [values[0] + params[1] * values[1],
-						  values[2] + params[2] * values[3],
-						  values[3] + params[3] * values]
+				coeffs = [values[0] + params[1] / 255.0 * values[1],
+						  values[2] + params[2] / 255.0 * values[3],
+						  values[4] + params[3] / 255.0 * values[5]]
 				keyframe_data.append((frameIndex, coeffs))
+				print ("frame=%d, %f, %f, %f" % (frameIndex, coeffs[0], coeffs[1], coeffs[2]))
+
 		elif self.comtype == 7:
 			values = numpy.frombuffer(mot.get_raw(0xc), dtype=numpy.dtype("<f2"))
 			print ("compType=7, values=", map(float, values))
