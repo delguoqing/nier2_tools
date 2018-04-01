@@ -11,12 +11,13 @@ def parse(mot):
 	version = mot.get("I")
 	assert version == 0x20120405
 
-	unk0 = mot.get("I")
+	unk0 = mot.get("H")
+	frame_count = mot.get("H")
 	track_offset = mot.get("I")
 	track_count = mot.get("I")
 	unk1 = mot.get("I")
 	name = mot.get("20s").rstrip("\x00")
-	print "MOT header: 0x%x, %d, %s" % (unk0, unk1, name)
+	print "MOT header: 0x%x, %d, name=%s, frame=%d" % (unk0, unk1, name, frame_count)
 	tracks = read_track(mot, track_offset, track_count)
 	
 def read_track(mot, offset, count):
@@ -46,28 +47,54 @@ def read_track(mot, offset, count):
 	# if compress type == 0, then it is a constant value
 	for trk_idx in xrange(count):
 		track = tracks[trk_idx]
-		print "Track %d @ 0x%x" % (trk_idx, offset + trk_idx * 0xc), track,
 		if track.offset > 0:
 			size = offset_size[track.offset]
-			print "0x%x" % size
 			if track.comtype in (6, 7):
-			 	assert size == 0xc + track.keycount * 0x4
-			# elif track.comtype in (3, ):
-			# 	pass
-			# elif track.comtype in (5, ):
-			# 	pass
-			# else:
-			# 	assert False, "unknown compression type %d" % (track.comtype)
-		else:
-			print
-	print "Dummy Track @ 0x%x" % (mot.offset - 0xc,),  dummy_track
+			 	assert size == align4(0xc + track.keycount * 0x4)
+			elif track.comtype == 5:
+				assert size == align4(0x18 + track.keycount * 0x8)
+			elif track.comtype == 3:
+				assert size == align4(0x4 + track.keycount * 0x1)
+			elif track.comtype == 2:
+				assert size == align4(0x8 + track.keycount * 0x2)
+			elif track.comtype == 8:
+				# 6 unsigned short + (unsigned short frameIndex + 3 byte coeffs)
+				assert size == align4(0xc + track.keycount * 0x5)
+			elif track.comtype == 4:
+				# no header + 0x10
+				assert size == align4(0x0 + track.keycount * 0x10)
+			elif track.comtype == 1:
+				# floats
+				assert size == align4(0x0 + track.keycount * 0x4)
+			else:
+			 	assert False, "unknown compression type %d" % (track.comtype)
 
+	hdr_offset = offset
 	for trk_idx in xrange(count):
 		track = tracks[trk_idx]
+		if track.comtype != 0:
+			size = offset_size[track.offset]
+		else:
+			size = 0
+			
+		print "Track %d hdr@0x%x, size=0x%x" % (trk_idx, hdr_offset, size),
+		print track
+		
 		if track.offset:
-			print "-----------------Track %d @ 0x%x: compType=%d" % (trk_idx, track.offset, track.comtype)
 			track.parse_keyframes(mot)
+		hdr_offset += 0xc
+		
+	print "Dummy Track @ 0x%x" % hdr_offset,
+	print dummy_track
+	
 	return tracks
+
+# align to 4 bytes
+def align4(size):
+	rem = size % 4
+	if rem:
+		size += 4 - rem
+	return size
 
 def parse_file(filepath):
 	fp = open(filepath, "rb")
@@ -77,4 +104,7 @@ def parse_file(filepath):
 	return mot
 
 if __name__ == "__main__":
-	parse_file(sys.argv[1])
+	if len(sys.argv) <= 1:
+		raise "No input file is provided!"
+	for filepath in util.iter_path(sys.argv[1]):
+		parse_file(filepath)
