@@ -1,10 +1,14 @@
 import sys
 import os
 import numpy
+import zlib
+import json
 import util
 import mot_structs
 
-def parse(mot):
+COMPRESS = True
+
+def parse(mot, dump=True):
 	fourcc = mot.get("4s")
 	assert fourcc == "mot\x00"
 
@@ -19,7 +23,16 @@ def parse(mot):
 	name = mot.get("20s").rstrip("\x00")
 	print "MOT header: 0x%x, %d, name=%s, frame=%d" % (unk0, unk1, name, frame_count)
 	tracks = read_track(mot, track_offset, track_count)
-	
+
+	if dump:
+		gtba = {
+			"pose": {},
+			"animations": {},
+		}
+		gtba["animations"][name] = dump_motion(frame_count, tracks);
+		filename = name + ".gtba"
+		write_file(gtba, filename);
+
 def read_track(mot, offset, count):
 	# read tracks
 	tracks = []
@@ -102,6 +115,53 @@ def parse_file(filepath):
 	mot = parse(mot)
 	fp.close()
 	return mot
+
+def write_file(gtba, out_path):
+	data = json.dumps(gtba, indent=2, sort_keys=True, ensure_ascii=True)
+	if COMPRESS:
+		f = open(out_path, "wb")
+		f.write("GTBA" + zlib.compress(data))
+	else:
+		f = open(out_path, "w")
+		f.write(data)
+	f.close()
+
+def dump_motion(frame_count, tracks):
+	evaluated_tracks = {}	# {bone_id: [POSX, POSY, POSZ, ROTX, ROTY, ROTZ, SCALEX, SCALEY, SCALEZ]}
+
+	# evaluate all tracks for all bones
+	for track in tracks:
+		bone_tracks = evaluated_tracks.setdefault(track.bone_id, [None] * 9)
+		frames = []
+		for i in xrange(frame_count):
+			frames.append(track.eval(i))
+		bone_tracks[track.type] = frames
+
+	# fill in missing tracks
+	default_value = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+	for bone_id, bone_tracks in evaluated_tracks.iteritems():
+		for i in xrange(len(bone_tracks)):
+			if bone_tracks[i] is None:
+				bone_tracks[i] = [default_value[i]] * frame_count
+
+	# combine separated tracks
+	motion_data = {}
+	for bone_id, bone_tracks in evaluated_tracks.iteritems():
+		pos_frames = []
+		rot_frames = []
+		scale_frames = []
+		for i in xrange(frame_count):
+			pos_frames.append((i, bone_tracks[0][i], bone_tracks[1][i], bone_tracks[2][i]))
+			rotx = bone_tracks[3][i]
+			roty = bone_tracks[4][i]
+			rotz = bone_tracks[5][i]
+			# TODO: need to convert euler angles to quaternion
+			scale_frames.append((i, bone_tracks[6][i], bone_tracks[7][i], bone_tracks[8][i]))
+		motion_data[bone_id] = [
+			pos_frames,
+			rot_frames,
+			scale_frames,
+		]
 
 if __name__ == "__main__":
 	if len(sys.argv) <= 1:
